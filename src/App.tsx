@@ -8,7 +8,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { format, formatDistanceToNow } from "date-fns";
 import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, User } from "firebase/auth";
-import { doc, setDoc, getDoc, collection, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc } from "firebase/firestore";
+import { doc, setDoc, getDoc, collection, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, deleteDoc } from "firebase/firestore";
 import { auth, db, handleFirestoreError, OperationType } from "./firebase";
 
 import { Button } from "@/components/ui/button";
@@ -241,6 +241,16 @@ export default function App() {
     }
   };
 
+  const handleDeleteUser = async (uid: string) => {
+    if (userRole !== "admin") return;
+    try {
+      const userRef = doc(db, "users", uid);
+      await deleteDoc(userRef);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `users/${uid}`);
+    }
+  };
+
   const handleAdminOverride = async (assessmentId: string, newDecision: "APPROVE" | "DENY") => {
     if (userRole !== "admin") return;
     try {
@@ -314,7 +324,12 @@ export default function App() {
 
     try {
       // Initialize the SDK. It will automatically use process.env.GEMINI_API_KEY depending on the environment.
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      // For Vercel deployments, use import.meta.env.VITE_GEMINI_API_KEY
+      const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : undefined);
+      if (!apiKey) {
+        throw new Error("An API Key must be set. If running on Vercel, please add VITE_GEMINI_API_KEY to your environment variables.");
+      }
+      const ai = new GoogleGenAI({ apiKey });
       
       const systemInstruction = `
 ## ROLE
@@ -1345,12 +1360,13 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                       <TableHead className="dark:text-slate-400 whitespace-nowrap">Email</TableHead>
                       <TableHead className="dark:text-slate-400 whitespace-nowrap">Role</TableHead>
                       <TableHead className="dark:text-slate-400 whitespace-nowrap">Joined</TableHead>
+                      <TableHead className="dark:text-slate-400 whitespace-nowrap text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody className="bg-white dark:bg-slate-900">
                     {allUsers.length === 0 ? (
                       <TableRow className="dark:border-slate-800">
-                        <TableCell colSpan={4} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                        <TableCell colSpan={5} className="text-center py-8 text-slate-500 dark:text-slate-400">
                           No users found.
                         </TableCell>
                       </TableRow>
@@ -1382,6 +1398,22 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                           </TableCell>
                           <TableCell className="text-sm text-slate-500 dark:text-slate-500 whitespace-nowrap">
                             {u.createdAt ? format(new Date(u.createdAt), 'PP') : 'Unknown'}
+                          </TableCell>
+                          <TableCell className="text-right whitespace-nowrap">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400"
+                              onClick={() => {
+                                if (window.confirm(`Are you sure you want to delete user ${u.email}?`)) {
+                                  handleDeleteUser(u.uid);
+                                }
+                              }}
+                              title="Delete User"
+                              disabled={u.uid === user?.uid} // Prevent self-deletion
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))
