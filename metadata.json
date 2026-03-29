@@ -1,5 +1,5 @@
 {
-  "name": "PM-CAS Credit Analytics",
-  "description": "Pride Microfinance Credit Analytics System for risk assessment.",
+  "name": "PM-CAS: Pride Microfinance Credit Analytics System",
+  "description": "Enterprise-grade credit risk assessment and analytics system for Pride Microfinance.",
   "requestFramePermissions": []
 }
