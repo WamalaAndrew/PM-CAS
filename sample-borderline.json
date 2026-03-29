@@ -1,0 +1,10 @@
+{
+  "applicant_name": "Alice Johnson (Borderline)",
+  "employment_type": "Contract",
+  "loan_amount": 15000,
+  "monthly_income": 3500,
+  "savings": 2000,
+  "late_payments": 1,
+  "purpose": "Medical Emergency",
+  "loan_purpose_details": "Need funds for unexpected medical bills. Have some savings but not enough."
+}

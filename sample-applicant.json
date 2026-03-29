@@ -1,0 +1,10 @@
+{
+  "applicant_name": "Jane Doe",
+  "employment_type": "Business Owner",
+  "loan_amount": 5000000,
+  "monthly_income": 1500000,
+  "savings": 800000,
+  "late_payments": 0,
+  "purpose": "Business Expansion",
+  "loan_purpose_details": "Purchasing new baking equipment to increase daily bread production capacity."
+}

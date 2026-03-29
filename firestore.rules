@@ -1,0 +1,157 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required, immutable) - The user's unique ID.
+    //   - email: string (required) - The user's email address.
+    //   - displayName: string (optional) - The user's display name.
+    //   - photoURL: string (optional) - The user's profile photo URL.
+    //   - role: string (required, immutable for non-admins) - The user's role.
+    //   - createdAt: string (required, immutable) - When the user was created.
+    //
+    // Collection: assessments
+    // Document ID: {assessmentId}
+    // Fields:
+    //   - assessment_id: string (required)
+    //   - applicant_name: string (required)
+    //   - applicant_id: string (required)
+    //   - date: string (required)
+    //   - credit_score: number (required)
+    //   - decision: string (required)
+    //   - risk_rating: string (required)
+    //   - key_findings: list of strings (required)
+    //   - mitigation_suggestion: string (required)
+    //   - system_integrity_check: string (required)
+    //   - uid: string (required, immutable) - The ID of the user who created this assessment.
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+    
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+    
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        (request.auth.token.email == "wamalaandrew632@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      let allowedKeys = ['uid', 'email', 'displayName', 'photoURL', 'role', 'createdAt'];
+      return request.resource.data.keys().hasOnly(allowedKeys) &&
+             hasRequiredFields(['uid', 'email', 'role', 'createdAt']) &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             isValidEmail(data.email) && data.email.size() < 100 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 500)) &&
+             data.role in ['admin', 'user'] &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidAssessment(data) {
+      let allowedKeys = ['assessment_id', 'applicant_name', 'applicant_id', 'date', 'credit_score', 'decision', 'risk_rating', 'key_findings', 'mitigation_suggestion', 'system_integrity_check', 'uid', 'admin_override', 'admin_uid', 'override_date'];
+      return request.resource.data.keys().hasOnly(allowedKeys) &&
+             hasRequiredFields(['assessment_id', 'applicant_name', 'applicant_id', 'date', 'credit_score', 'decision', 'risk_rating', 'key_findings', 'mitigation_suggestion', 'system_integrity_check', 'uid']) &&
+             data.assessment_id is string && data.assessment_id.size() > 0 && data.assessment_id.size() < 100 &&
+             data.applicant_name is string && data.applicant_name.size() > 0 && data.applicant_name.size() < 100 &&
+             data.applicant_id is string && data.applicant_id.size() > 0 && data.applicant_id.size() < 100 &&
+             isValidDateString(data.date) &&
+             data.credit_score is number && data.credit_score >= 0 && data.credit_score <= 1000 &&
+             data.decision in ['APPROVE', 'DENY', 'REFER TO COMMITTEE'] &&
+             data.risk_rating in ['Low', 'Moderate', 'High', 'Critical'] &&
+             data.key_findings is list && data.key_findings.size() <= 20 &&
+             data.mitigation_suggestion is string && data.mitigation_suggestion.size() < 5000 &&
+             data.system_integrity_check is string && data.system_integrity_check.size() < 500 &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             (!('admin_override' in data) || data.admin_override is bool) &&
+             (!('admin_uid' in data) || (data.admin_uid is string && data.admin_uid.size() < 100)) &&
+             (!('override_date' in data) || isValidDateString(data.override_date));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      
+      allow create: if isAuthenticated() && 
+                       isOwner(userId) && 
+                       isValidUser(request.resource.data) && 
+                       uidUnchanged() &&
+                       ((request.resource.data.role == 'user') || isAdmin());
+                       
+      allow update: if isAuthenticated() && 
+                       isOwner(userId) && 
+                       isValidUser(request.resource.data) && 
+                       uidNotModified() &&
+                       request.resource.data.createdAt == resource.data.createdAt &&
+                       ((request.resource.data.role == resource.data.role) || isAdmin());
+                       
+      allow delete: if isAdmin();
+    }
+
+    match /assessments/{assessmentId} {
+      allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
+      
+      allow create: if isAuthenticated() && 
+                       isValidAssessment(request.resource.data) && 
+                       uidUnchanged();
+                       
+      allow update: if isAuthenticated() && 
+                       (isDocOwner() || isAdmin()) && 
+                       isValidAssessment(request.resource.data) && 
+                       uidNotModified() &&
+                       request.resource.data.assessment_id == resource.data.assessment_id &&
+                       request.resource.data.date == resource.data.date;
+                       
+      allow delete: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
+    }
+  }
+}

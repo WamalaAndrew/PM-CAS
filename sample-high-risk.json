@@ -1,0 +1,10 @@
+{
+  "applicant_name": "John Doe (High Risk)",
+  "employment_type": "Self-Employed",
+  "loan_amount": 50000,
+  "monthly_income": 2000,
+  "savings": 1000,
+  "late_payments": 4,
+  "purpose": "Business Expansion",
+  "loan_purpose_details": "Buying new inventory for the shop but currently struggling with cash flow."
+}
