@@ -73,6 +73,8 @@ type PastAssessment = AssessmentResult & {
   applicant_id: string;
   date: string;
   uid?: string;
+  officer_name?: string;
+  officer_email?: string;
 };
 
 export default function App() {
@@ -384,7 +386,9 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
           applicant_name: values.applicant_name,
           applicant_id,
           date: new Date().toISOString(),
-          uid: user.uid
+          uid: user.uid,
+          officer_name: user.displayName || 'Unknown Officer',
+          officer_email: user.email || 'Unknown Email'
         };
         
         try {
@@ -505,15 +509,29 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
       "Decision", 
       "Risk Rating"
     ];
+
+    if (userRole === "admin") {
+      headers.push("Loan Officer Name", "Loan Officer Email");
+    }
     
-    const rows = pastAssessments.map(assessment => [
-      format(new Date(assessment.date), 'yyyy-MM-dd HH:mm:ss'),
-      assessment.assessment_id,
-      assessment.applicant_name,
-      assessment.credit_score.toString(),
-      assessment.decision,
-      assessment.risk_rating
-    ]);
+    const rows = pastAssessments.map(assessment => {
+      const row = [
+        format(new Date(assessment.date), 'yyyy-MM-dd HH:mm:ss'),
+        assessment.assessment_id,
+        assessment.applicant_name,
+        assessment.credit_score.toString(),
+        assessment.decision,
+        assessment.risk_rating
+      ];
+
+      if (userRole === "admin") {
+        const officerName = assessment.officer_name || (allUsers.find(u => u.uid === assessment.uid)?.displayName) || 'Unknown Officer';
+        const officerEmail = assessment.officer_email || (allUsers.find(u => u.uid === assessment.uid)?.email) || 'Unknown Email';
+        row.push(officerName, officerEmail);
+      }
+
+      return row;
+    });
     
     const csvContent = "data:text/csv;charset=utf-8," 
       + headers.join(",") + "\n" 
@@ -1258,6 +1276,7 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                     <TableHead className="dark:text-slate-400 whitespace-nowrap">Score</TableHead>
                     <TableHead className="dark:text-slate-400 whitespace-nowrap">Risk Rating</TableHead>
                     <TableHead className="dark:text-slate-400 whitespace-nowrap">Decision</TableHead>
+                    {userRole === "admin" && <TableHead className="dark:text-slate-400 whitespace-nowrap">Loan Officer</TableHead>}
                     {userRole === "admin" && <TableHead className="text-right dark:text-slate-400 whitespace-nowrap">Admin Action</TableHead>}
                     <TableHead className="text-right dark:text-slate-400 whitespace-nowrap">Actions</TableHead>
                   </TableRow>
@@ -1265,7 +1284,7 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                 <TableBody className="bg-white dark:bg-slate-900">
                   {filteredAssessments.length === 0 ? (
                     <TableRow className="dark:border-slate-800">
-                      <TableCell colSpan={userRole === "admin" ? 9 : 8} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                      <TableCell colSpan={userRole === "admin" ? 10 : 8} className="text-center py-8 text-slate-500 dark:text-slate-400">
                         No past assessments found.
                       </TableCell>
                     </TableRow>
@@ -1297,6 +1316,18 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                             {assessment.decision}
                           </Badge>
                         </TableCell>
+                        {userRole === "admin" && (
+                          <TableCell className="whitespace-nowrap">
+                            <div className="flex flex-col">
+                              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                                {assessment.officer_name || (allUsers.find(u => u.uid === assessment.uid)?.displayName) || 'Unknown Officer'}
+                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400">
+                                {assessment.officer_email || (allUsers.find(u => u.uid === assessment.uid)?.email) || ''}
+                              </span>
+                            </div>
+                          </TableCell>
+                        )}
                         {userRole === "admin" && (
                           <TableCell className="text-right whitespace-nowrap">
                             {assessment.decision === "REFER TO COMMITTEE" ? (
