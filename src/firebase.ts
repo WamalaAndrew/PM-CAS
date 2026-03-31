@@ -39,8 +39,10 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -57,6 +59,17 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   };
+
+  if (errorMessage.includes('Missing or insufficient permissions') || errorMessage.includes('permission-denied')) {
+    console.error(`🚨 FIRESTORE PERMISSION ERROR 🚨
+Operation: ${operationType}
+Path: ${path}
+User ID: ${auth.currentUser?.uid || 'Unauthenticated'}
+Guidance: The current user does not have the required permissions to perform this operation. 
+Please check your firestore.rules file to ensure that the rules allow this operation for this user's role and the specific path.
+`);
+  }
+
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }

@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuGroup } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from "recharts";
 
@@ -60,16 +61,24 @@ const formSchema = z.object({
 
 type AssessmentResult = {
   assessment_id: string;
+  applicant_name: string;
+  loan_type: string;
   credit_score: number;
   decision: "APPROVE" | "DENY" | "REFER TO COMMITTEE";
   risk_rating: "Low" | "Moderate" | "High" | "Critical";
+  five_cs_breakdown: {
+    character: { score: number; assessment: string; findings: string[] };
+    capacity: { score: number; assessment: string; findings: string[] };
+    capital: { score: number; assessment: string; findings: string[] };
+    collateral: { score: number; assessment: string; findings: string[] };
+    conditions: { score: number; assessment: string; findings: string[] };
+  };
   key_findings: string[];
   mitigation_suggestion: string;
   system_integrity_check: string;
 };
 
 type PastAssessment = AssessmentResult & {
-  applicant_name: string;
   applicant_id: string;
   date: string;
   uid?: string;
@@ -77,10 +86,39 @@ type PastAssessment = AssessmentResult & {
   officer_email?: string;
 };
 
+const applicantFormSchema = z.object({
+  loan_type: z.string().min(1, "Please select a loan type."),
+  loan_amount: z.coerce.number().min(1000, "Minimum amount is 1000."),
+  loan_purpose: z.string().min(5, "Please provide a brief purpose."),
+  monthly_income: z.coerce.number().min(100, "Minimum income is 100."),
+  savings_balance: z.coerce.number().min(0, "Cannot be negative."),
+  employment_tenure_months: z.coerce.number().min(0, "Cannot be negative."),
+  collateral_type: z.string().min(1, "Please select collateral type."),
+  collateral_value: z.coerce.number().min(0, "Cannot be negative."),
+  group_guarantee: z.boolean().default(false),
+  business_sector: z.string().min(1, "Please specify business sector."),
+  location: z.string().min(1, "Please specify location."),
+});
+
+const officerReviewSchema = z.object({
+  late_payments_count: z.coerce.number().min(0, "Cannot be negative."),
+  crb_status: z.string().min(1, "Please select CRB status."),
+  references_verified: z.boolean().default(false),
+});
+
+type LoanApplication = z.infer<typeof applicantFormSchema> & {
+  id: string;
+  uid: string;
+  applicant_name: string;
+  status: "pending" | "assessed" | "approved" | "denied";
+  assessment_id?: string;
+  createdAt: string;
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [userRole, setUserRole] = useState<"admin" | "user" | null>(null);
-  const [actualRole, setActualRole] = useState<"admin" | "user" | null>(null);
+  const [userRole, setUserRole] = useState<"admin" | "officer" | "applicant" | null>(null);
+  const [actualRole, setActualRole] = useState<"admin" | "officer" | "applicant" | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
@@ -88,11 +126,16 @@ export default function App() {
   const [result, setResult] = useState<AssessmentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pastAssessments, setPastAssessments] = useState<PastAssessment[]>([]);
+  const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterDecision, setFilterDecision] = useState("ALL");
   const [isDragging, setIsDragging] = useState(false);
-  const [activeTab, setActiveTab] = useState<"assessments" | "users">("assessments");
+  const [activeTab, setActiveTab] = useState<"assessments" | "users" | "applications" | "manual">("applications");
+  
+  const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [selectedApplication, setSelectedApplication] = useState<LoanApplication | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('pmcas-dark-mode');
     return saved ? JSON.parse(saved) : false;
@@ -122,7 +165,7 @@ export default function App() {
           const isBootstrapAdmin = currentUser.email === "wamalaandrew632@gmail.com";
           
           if (!userSnap.exists()) {
-            const initialRole = isBootstrapAdmin ? "admin" : "user";
+            const initialRole = isBootstrapAdmin ? "admin" : "applicant";
             try {
               await setDoc(userRef, {
                 uid: currentUser.uid,
@@ -139,13 +182,16 @@ export default function App() {
             }
           } else {
             const currentRole = userSnap.data().role;
-            if (isBootstrapAdmin && currentRole !== "admin") {
+            let mappedRole = currentRole;
+            if (currentRole === "user") mappedRole = "officer";
+            
+            if (isBootstrapAdmin && mappedRole !== "admin") {
               await updateDoc(userRef, { role: "admin" });
               setUserRole("admin");
               setActualRole("admin");
             } else {
-              setUserRole(currentRole as "admin" | "user");
-              setActualRole(currentRole as "admin" | "user");
+              setUserRole(mappedRole as "admin" | "officer" | "applicant");
+              setActualRole(mappedRole as "admin" | "officer" | "applicant");
             }
           }
         } catch (e) {
@@ -210,6 +256,157 @@ export default function App() {
     return () => unsubscribe();
   }, [user, isAuthReady, userRole]);
 
+  // Firestore Data Listener for Applications
+  useEffect(() => {
+    if (!isAuthReady || !user || !userRole) return;
+
+    let q;
+    if (userRole === "admin" || userRole === "officer") {
+      q = query(collection(db, "loanApplications"), orderBy("createdAt", "desc"));
+    } else {
+      q = query(
+        collection(db, "loanApplications"),
+        where("uid", "==", user.uid),
+        orderBy("createdAt", "desc")
+      );
+    }
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const apps: LoanApplication[] = [];
+      snapshot.forEach((doc) => {
+        apps.push(doc.data() as LoanApplication);
+      });
+      setApplications(apps);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, "loanApplications");
+    });
+
+    return () => unsubscribe();
+  }, [user, isAuthReady, userRole]);
+
+  const applicantForm = useForm<z.infer<typeof applicantFormSchema>>({
+    resolver: zodResolver(applicantFormSchema) as any,
+    defaultValues: {
+      loan_type: "",
+      loan_amount: 1000,
+      loan_purpose: "",
+      monthly_income: 100,
+      savings_balance: 0,
+      employment_tenure_months: 0,
+      collateral_type: "",
+      collateral_value: 0,
+      group_guarantee: false,
+      business_sector: "",
+      location: "",
+    },
+  });
+
+  const officerForm = useForm<z.infer<typeof officerReviewSchema>>({
+    resolver: zodResolver(officerReviewSchema) as any,
+    defaultValues: {
+      late_payments_count: 0,
+      crb_status: "",
+      references_verified: false,
+    },
+  });
+
+  const onApplySubmit = async (values: z.infer<typeof applicantFormSchema>) => {
+    if (!user) return;
+    setIsLoading(true);
+    try {
+      const newAppRef = doc(collection(db, "loanApplications"));
+      const newApp: any = {
+        ...values,
+        id: newAppRef.id,
+        uid: user.uid,
+        applicant_id: user.uid,
+        applicant_name: user.displayName || "Unknown",
+        applicant_email: user.email || "unknown@example.com",
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      await setDoc(newAppRef, newApp);
+      setIsApplyModalOpen(false);
+      applicantForm.reset();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, "loanApplications");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const onReviewSubmit = async (values: z.infer<typeof officerReviewSchema>) => {
+    if (!user || !selectedApplication) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const payload = {
+        applicant_name: selectedApplication.applicant_name,
+        loan_amount: selectedApplication.loan_amount,
+        loan_purpose: selectedApplication.loan_purpose,
+        monthly_income: selectedApplication.monthly_income,
+        savings_balance: selectedApplication.savings_balance,
+        employment_tenure_months: selectedApplication.employment_tenure_months,
+        late_payments_count: values.late_payments_count,
+        collateral_type: selectedApplication.collateral_type,
+        collateral_value: selectedApplication.collateral_value,
+        group_guarantee: selectedApplication.group_guarantee,
+        crb_status: values.crb_status,
+        business_sector: selectedApplication.business_sector,
+        location: selectedApplication.location,
+        references_verified: values.references_verified,
+        loan_type: selectedApplication.loan_type,
+      };
+
+      const res = await fetch("/api/assess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        let errorMessage = `API error: ${res.statusText}`;
+        try {
+          const errorData = await res.json();
+          if (errorData.error) {
+            errorMessage = errorData.error;
+          }
+        } catch (e) {
+          // Ignore JSON parse error if response is not JSON
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await res.json();
+      
+      const assessmentRef = doc(collection(db, "assessments"));
+      const pastAssessment: PastAssessment = {
+        ...data,
+        applicant_id: selectedApplication.id,
+        date: new Date().toISOString(),
+        uid: selectedApplication.uid,
+        officer_name: user.displayName || "Unknown",
+        officer_email: user.email || "Unknown",
+      };
+      
+      await setDoc(assessmentRef, pastAssessment);
+      
+      await updateDoc(doc(db, "loanApplications", selectedApplication.id), {
+        status: "assessed",
+        assessment_id: assessmentRef.id,
+      });
+
+      setResult(data);
+      setIsReviewModalOpen(false);
+      officerForm.reset();
+      setActiveTab("assessments");
+    } catch (err: any) {
+      setError(err.message || "An error occurred during assessment.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleLogin = async () => {
     setIsLoggingIn(true);
     setError(null);
@@ -231,6 +428,15 @@ export default function App() {
       form.reset();
     } catch (err) {
       console.error("Logout error:", err);
+    }
+  };
+
+  const handleStatusUpdate = async (appId: string, newStatus: "approved" | "denied") => {
+    try {
+      const appRef = doc(db, "loanApplications", appId);
+      await updateDoc(appRef, { status: newStatus });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `loanApplications/${appId}`);
     }
   };
 
@@ -334,23 +540,98 @@ export default function App() {
       const ai = new GoogleGenAI({ apiKey });
       
       const systemInstruction = `
-## ROLE
-You are the "Core Intelligence Module" for the Pride Microfinance Credit Analytics System (PM-CAS). You act as a Senior Credit Risk Officer.
+ROLE
+You are the "Core Intelligence Module" for the Pride Microfinance Credit Analytics System (PM-CAS). You act as a Senior Credit Risk Officer specializing in microfinance lending standards in Uganda.
 
-## OBJECTIVE
-Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must provide a high-precision risk assessment based on microfinance lending standards in Uganda.
+OBJECTIVE
+Analyze raw financial data sent via JSON from a PHP/FIREBASE backend as it was. You must provide a high-precision risk assessment based on the 5 Cs of Credit framework (Character, Capacity, Capital, Collateral, Conditions) and microfinance underwriting standards in Uganda.
 
-## OPERATIONAL CONSTRAINTS
-1. OUTPUT FORMAT: Always return a valid JSON object. No conversational text, no markdown, no "Here is your result."
-2. RISK CALCULATION LOGIC:
-   - Debt-to-Income (DTI): If Loan Amount > (Monthly Income * 5), Flag as HIGH RISK.
-   - Liquidity: If Savings < (Loan Amount * 0.10), Flag as LOW CAPITAL.
-   - History: If Late Payments > 2, Decision MUST be "DENY".
-3. TONE: Professional, analytical, and data-driven.
+OPERATIONAL CONSTRAINTS
+OUTPUT FORMAT: Always return a valid JSON object. No conversational text, no markdown, no explanations outside the JSON.
+
+LOAN TYPES: Support assessment for Pride Microfinance's loan products including:
+SME Corporate Loan (business expansion, flat rate 14%)
+Mortgage Loan (home ownership financing, long-term)
+Home Improvement Loan (property renovation/upgrade)
+Sacco/Investment Club Loan (group-based lending, up to 150% of savings)
+School Fees Loan (education financing)
+Salary Loan (individual employment-based)
+Group Guaranteed Loan (social collateral model)
+Emergency/Collateral-Free Loan (short-term working capital)
+
+5 Cs ASSESSMENT FRAMEWORK:
+CHARACTER (Credit History & Reliability)
+Late payment count
+Credit bureau reference (CRB) status
+References verification
+Business stability/employment tenure
+Scoring: 0-20 points (lower = better character)
+
+CAPACITY (Debt Service Ability)
+Debt-to-Income Ratio = Loan Amount / Monthly Income
+Acceptable threshold: ≤ 5x monthly income
+Scoring: 0-25 points (DTI >5 = +20 pts, DTI >8 = +25 pts)
+
+CAPITAL (Financial Reserves)
+Savings balance vs. loan amount
+Minimum requirement: Savings ≥ 10% of loan amount
+Scoring: 0-20 points (deficit = +15 pts)
+
+COLLATERAL (Security)
+For secured loans: Assess collateral value vs. loan amount
+For group loans: Social collateral/group guarantee strength
+For unsecured: Alternative data (references, business activity)
+Scoring: 0-20 points (no collateral +15 pts)
+
+CONDITIONS (External Factors)
+Loan purpose alignment with product type
+Economic/industry conditions
+Geographic location risk
+Scoring: 0-15 points (adverse conditions +10 pts)
+
+CREDIT SCORE CALCULATION:
+Start at 0. Add points based on risk factors:
+| Risk Factor | Points Added |
+|-------------|--------------|
+| DTI >5x monthly income | +20 |
+| DTI >8x monthly income | +25 |
+| Savings <10% of loan | +15 |
+| Late Payments = 1 | +15 |
+| Late Payments = 2 | +30 |
+| Late Payments ≥ 3 | +50 (auto-deny) |
+| No collateral/unguaranteed | +15 |
+| Adverse conditions present | +10 |
+| CRB negative record | +25 |
+| References unverified | +10 |
+| Unstable employment (<6 months) | +15 |
+| Maximum score: 100 |
+
+DECISION MATRIX:
+Late Payments > 2 OR CRB Negative Record → DENY (overrides all)
+Score 0–25 → APPROVE
+Score 26–55 → REFER TO COMMITTEE
+Score 56–100 → DENY
+
+RISK RATING:
+0–20: Low
+21–40: Moderate
+41–65: High
+66–100: Critical
+
+TONE: Professional, analytical, data-driven. Reference Ugandan microfinance context where appropriate.
+
+INSTRUCTIONS
+Parse the input JSON and identify the loan_type.
+Apply the 5 Cs assessment framework to evaluate the applicant across all five dimensions.
+Calculate credit score by starting at 0 and adding points for each risk factor present.
+Apply decision matrix with overrides for late payments >2 or negative CRB.
+Generate a unique assessment_id using today's date and a sequential number.
+For the mitigation_suggestion, provide loan-type specific recommendations referencing Pride Microfinance's actual products and policies where relevant.
+Output ONLY the JSON object. No preamble, no closing remarks.
 `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.1-pro-preview",
         contents: JSON.stringify(values),
         config: {
           systemInstruction,
@@ -359,14 +640,27 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
             type: Type.OBJECT,
             properties: {
               assessment_id: { type: Type.STRING },
-              credit_score: { type: Type.INTEGER, description: "0-100, (0=Perfect, 100=Critical Risk)" },
+              applicant_name: { type: Type.STRING },
+              loan_type: { type: Type.STRING },
+              credit_score: { type: Type.INTEGER },
               decision: { type: Type.STRING, enum: ["APPROVE", "DENY", "REFER TO COMMITTEE"] },
               risk_rating: { type: Type.STRING, enum: ["Low", "Moderate", "High", "Critical"] },
+              five_cs_breakdown: {
+                type: Type.OBJECT,
+                properties: {
+                  character: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] },
+                  capacity: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] },
+                  capital: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] },
+                  collateral: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] },
+                  conditions: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] }
+                },
+                required: ["character", "capacity", "capital", "collateral", "conditions"]
+              },
               key_findings: { type: Type.ARRAY, items: { type: Type.STRING } },
               mitigation_suggestion: { type: Type.STRING },
               system_integrity_check: { type: Type.STRING }
             },
-            required: ["assessment_id", "credit_score", "decision", "risk_rating", "key_findings", "mitigation_suggestion", "system_integrity_check"]
+            required: ["assessment_id", "applicant_name", "loan_type", "credit_score", "decision", "risk_rating", "five_cs_breakdown", "key_findings", "mitigation_suggestion", "system_integrity_check"]
           }
         }
       });
@@ -383,7 +677,6 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
       if (user) {
         const assessmentData: PastAssessment = {
           ...data,
-          applicant_name: values.applicant_name,
           applicant_id,
           date: new Date().toISOString(),
           uid: user.uid,
@@ -591,9 +884,24 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
       startY: 75,
       head: [['Metric', 'Value']],
       body: [
-        ['Credit Score', assessment.credit_score.toString() + ' / 1000'],
+        ['Credit Score', assessment.credit_score.toString() + ' / 100'],
         ['Risk Rating', assessment.risk_rating],
       ],
+      headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42] },
+      theme: 'grid'
+    });
+
+    const fiveCsBody = Object.entries(assessment.five_cs_breakdown).map(([c, details]: [string, any]) => [
+      c.toUpperCase(),
+      `${details.score} pts`,
+      details.assessment,
+      details.findings.join('\n')
+    ]);
+
+    autoTable(doc, {
+      startY: (doc as any).lastAutoTable.finalY + 10,
+      head: [['5 Cs of Credit', 'Score', 'Assessment', 'Findings']],
+      body: fiveCsBody,
       headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42] },
       theme: 'grid'
     });
@@ -716,8 +1024,14 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
               >
                 {isDarkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
               </Button>
-              {userRole === "admin" && (
+              {userRole !== "applicant" && (
                 <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-lg">
+                  <button
+                    onClick={() => setActiveTab("applications")}
+                    className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${activeTab === "applications" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                  >
+                    Applications
+                  </button>
                   <button
                     onClick={() => setActiveTab("assessments")}
                     className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${activeTab === "assessments" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
@@ -725,12 +1039,20 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                     Assessments
                   </button>
                   <button
-                    onClick={() => setActiveTab("users")}
-                    className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === "users" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                    onClick={() => setActiveTab("manual")}
+                    className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${activeTab === "manual" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
                   >
-                    <Users className="w-4 h-4 hidden sm:block" />
-                    Users
+                    Manual
                   </button>
+                  {userRole === "admin" && (
+                    <button
+                      onClick={() => setActiveTab("users")}
+                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === "users" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                    >
+                      <Users className="w-4 h-4 hidden sm:block" />
+                      Users
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -779,7 +1101,367 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
           </div>
         </header>
 
-        {activeTab === "assessments" ? (
+        {activeTab === "applications" && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Loan Applications</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">View and manage loan applications.</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500 dark:text-slate-400" />
+                  <Input
+                    type="search"
+                    placeholder="Search applicant name or ID..."
+                    className="pl-8 w-[250px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <Select value={filterDecision} onValueChange={setFilterDecision}>
+                  <SelectTrigger className="w-[180px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
+                    <SelectValue placeholder="Filter by status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All Statuses</SelectItem>
+                    <SelectItem value="pending">Pending Review</SelectItem>
+                    <SelectItem value="assessed">Assessed</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="denied">Denied</SelectItem>
+                  </SelectContent>
+                </Select>
+                {userRole === "applicant" && (
+                  <Dialog open={isApplyModalOpen} onOpenChange={setIsApplyModalOpen}>
+                    <DialogTrigger asChild>
+                      <Button className="bg-blue-600 hover:bg-blue-700 text-white">
+                        Apply for Loan
+                      </Button>
+                    </DialogTrigger>
+                  <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle>Loan Application</DialogTitle>
+                      <DialogDescription>
+                        Fill out the details below to apply for a loan.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <Form {...applicantForm}>
+                      <form onSubmit={applicantForm.handleSubmit(onApplySubmit)} className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <FormField
+                            control={applicantForm.control}
+                            name="loan_type"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Loan Type</FormLabel>
+                                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Select type" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="SME Corporate Loan">SME Corporate Loan</SelectItem>
+                                    <SelectItem value="Mortgage Loan">Mortgage Loan</SelectItem>
+                                    <SelectItem value="Home Improvement Loan">Home Improvement Loan</SelectItem>
+                                    <SelectItem value="Sacco/Investment Club Loan">Sacco/Investment Club Loan</SelectItem>
+                                    <SelectItem value="School Fees Loan">School Fees Loan</SelectItem>
+                                    <SelectItem value="Agriculture/Agribusiness Loan">Agriculture/Agribusiness Loan</SelectItem>
+                                    <SelectItem value="Salary Loan">Salary Loan</SelectItem>
+                                    <SelectItem value="Asset Financing Loan">Asset Financing Loan</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="loan_amount"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Amount (UGX)</FormLabel>
+                                <FormControl>
+                                  <Input type="number" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="loan_purpose"
+                            render={({ field }) => (
+                              <FormItem className="col-span-2">
+                                <FormLabel>Purpose</FormLabel>
+                                <FormControl>
+                                  <Input {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="monthly_income"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Monthly Income (UGX)</FormLabel>
+                                <FormControl>
+                                  <Input type="number" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="savings_balance"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Savings Balance (UGX)</FormLabel>
+                                <FormControl>
+                                  <Input type="number" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="employment_tenure_months"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Employment/Business Tenure (Months)</FormLabel>
+                                <FormControl>
+                                  <Input type="number" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="collateral_type"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Collateral Type</FormLabel>
+                                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Select collateral" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="Land Title">Land Title</SelectItem>
+                                    <SelectItem value="Vehicle Logbook">Vehicle Logbook</SelectItem>
+                                    <SelectItem value="Business Assets">Business Assets</SelectItem>
+                                    <SelectItem value="Guarantors">Guarantors</SelectItem>
+                                    <SelectItem value="None">None</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="collateral_value"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Collateral Value (UGX)</FormLabel>
+                                <FormControl>
+                                  <Input type="number" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="business_sector"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Business Sector</FormLabel>
+                                <FormControl>
+                                  <Input {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="location"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Location</FormLabel>
+                                <FormControl>
+                                  <Input {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+                        <DialogFooter>
+                          <Button type="submit" disabled={isLoading}>
+                            {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            Submit Application
+                          </Button>
+                        </DialogFooter>
+                      </form>
+                    </Form>
+                  </DialogContent>
+                </Dialog>
+              )}
+            </div>
+          </div>
+          <Card className="border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader className="bg-slate-50 dark:bg-slate-950">
+                    <TableRow className="dark:border-slate-800">
+                      <TableHead className="dark:text-slate-400 whitespace-nowrap">Date</TableHead>
+                      <TableHead className="dark:text-slate-400 whitespace-nowrap">Applicant</TableHead>
+                      <TableHead className="dark:text-slate-400 whitespace-nowrap">Loan Type</TableHead>
+                      <TableHead className="dark:text-slate-400 whitespace-nowrap">Amount</TableHead>
+                      <TableHead className="dark:text-slate-400 whitespace-nowrap">Status</TableHead>
+                      <TableHead className="text-right dark:text-slate-400 whitespace-nowrap">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className="bg-white dark:bg-slate-900">
+                    {applications.filter(app => {
+                      const matchesSearch = app.applicant_name.toLowerCase().includes(searchQuery.toLowerCase()) || app.id.toLowerCase().includes(searchQuery.toLowerCase());
+                      const matchesStatus = filterDecision === "ALL" || app.status === filterDecision;
+                      return matchesSearch && matchesStatus;
+                    }).length === 0 ? (
+                      <TableRow className="dark:border-slate-800">
+                        <TableCell colSpan={6} className="text-center py-8 text-slate-500 dark:text-slate-400">
+                          No applications found.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      applications.filter(app => {
+                        const matchesSearch = app.applicant_name.toLowerCase().includes(searchQuery.toLowerCase()) || app.id.toLowerCase().includes(searchQuery.toLowerCase());
+                        const matchesStatus = filterDecision === "ALL" || app.status === filterDecision;
+                        return matchesSearch && matchesStatus;
+                      }).map((app) => (
+                        <TableRow key={app.id} className="dark:border-slate-800 dark:hover:bg-slate-800/50">
+                          <TableCell className="text-sm text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                            {formatDistanceToNow(new Date(app.createdAt), { addSuffix: true })}
+                          </TableCell>
+                          <TableCell className="font-medium text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                            {app.applicant_name}
+                          </TableCell>
+                          <TableCell className="text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                            {app.loan_type}
+                          </TableCell>
+                          <TableCell className="text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                            {app.loan_amount.toLocaleString()}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap">
+                            <Badge variant={app.status === "pending" ? "secondary" : app.status === "approved" ? "default" : app.status === "denied" ? "destructive" : "outline"}>
+                              {app.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right whitespace-nowrap">
+                            {userRole !== "applicant" && app.status === "pending" && (
+                              <Dialog open={isReviewModalOpen && selectedApplication?.id === app.id} onOpenChange={(open) => {
+                                setIsReviewModalOpen(open);
+                                if (open) setSelectedApplication(app);
+                                else setSelectedApplication(null);
+                              }}>
+                                <DialogTrigger asChild>
+                                  <Button size="sm" variant="outline">Review</Button>
+                                </DialogTrigger>
+                                <DialogContent>
+                                  <DialogHeader>
+                                    <DialogTitle>Review Application</DialogTitle>
+                                    <DialogDescription>
+                                      Provide officer details to assess this application.
+                                    </DialogDescription>
+                                  </DialogHeader>
+                                  <Form {...officerForm}>
+                                    <form onSubmit={officerForm.handleSubmit(onReviewSubmit)} className="space-y-4">
+                                      <FormField
+                                        control={officerForm.control}
+                                        name="late_payments_count"
+                                        render={({ field }) => (
+                                          <FormItem>
+                                            <FormLabel>Late Payments Count</FormLabel>
+                                            <FormControl>
+                                              <Input type="number" {...field} />
+                                            </FormControl>
+                                            <FormMessage />
+                                          </FormItem>
+                                        )}
+                                      />
+                                      <FormField
+                                        control={officerForm.control}
+                                        name="crb_status"
+                                        render={({ field }) => (
+                                          <FormItem>
+                                            <FormLabel>CRB Status</FormLabel>
+                                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                              <FormControl>
+                                                <SelectTrigger>
+                                                  <SelectValue placeholder="Select status" />
+                                                </SelectTrigger>
+                                              </FormControl>
+                                              <SelectContent>
+                                                <SelectItem value="Clear">Clear</SelectItem>
+                                                <SelectItem value="Listed">Listed</SelectItem>
+                                                <SelectItem value="Unknown">Unknown</SelectItem>
+                                              </SelectContent>
+                                            </Select>
+                                            <FormMessage />
+                                          </FormItem>
+                                        )}
+                                      />
+                                      <DialogFooter>
+                                        <Button type="submit" disabled={isLoading}>
+                                          {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                          Assess Application
+                                        </Button>
+                                      </DialogFooter>
+                                    </form>
+                                  </Form>
+                                </DialogContent>
+                              </Dialog>
+                            )}
+                            {userRole !== "applicant" && app.status === "assessed" && (
+                              <div className="flex justify-end gap-2">
+                                <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  className="h-8 text-xs bg-green-50 dark:bg-green-950/30 text-green-600 dark:text-green-400 border-green-200 dark:border-green-900/50 hover:bg-green-100 dark:hover:bg-green-900/50" 
+                                  onClick={() => handleStatusUpdate(app.id, "approved")}
+                                >
+                                  Approve
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  className="h-8 text-xs bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 border-red-200 dark:border-red-900/50 hover:bg-red-100 dark:hover:bg-red-900/50" 
+                                  onClick={() => handleStatusUpdate(app.id, "denied")}
+                                >
+                                  Deny
+                                </Button>
+                              </div>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === "assessments" && (
           <>
             {/* Analytics Dashboard */}
             <div className="mb-2">
@@ -852,9 +1534,12 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                 </CardContent>
               </Card>
             </div>
+          </>
+        )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {/* Input Form */}
+        {activeTab === "manual" && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* Input Form */}
           <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
             <CardHeader className="bg-slate-50/50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-800 pb-4 flex flex-row items-start justify-between">
               <div>
@@ -1168,8 +1853,39 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                       <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Credit Score</p>
                       <div className="flex items-baseline justify-center gap-1">
                         <span className="text-3xl font-bold font-mono text-slate-800 dark:text-slate-100">{result.credit_score}</span>
-                        <span className="text-xs text-slate-400">/1000</span>
+                        <span className="text-xs text-slate-400">/100</span>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* 5 Cs Breakdown */}
+                  <div className="p-6 bg-slate-50 dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800">
+                    <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 uppercase tracking-wider mb-4 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+                      5 Cs of Credit Breakdown
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {Object.entries(result.five_cs_breakdown).map(([c, details]: [string, any]) => (
+                        <Card key={c} className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-950">
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-bold uppercase text-slate-700 dark:text-slate-300 flex justify-between">
+                              {c}
+                              <span className="text-blue-600 dark:text-blue-400">{details.score} pts</span>
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <p className="text-xs text-slate-600 dark:text-slate-400 mb-2">{details.assessment}</p>
+                            <ul className="space-y-1">
+                              {details.findings.map((f, i) => (
+                                <li key={i} className="text-xs text-slate-500 dark:text-slate-500 flex items-start gap-1">
+                                  <span className="mt-1 w-1 h-1 rounded-full bg-slate-400 shrink-0" />
+                                  {f}
+                                </li>
+                              ))}
+                            </ul>
+                          </CardContent>
+                        </Card>
+                      ))}
                     </div>
                   </div>
 
@@ -1220,9 +1936,11 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
             )}
           </div>
         </div>
+        )}
 
-        {/* Past Assessments Section */}
-        <div className="mt-12 space-y-6">
+        {activeTab === "assessments" && (
+        <div className="space-y-6">
+          {/* Past Assessments Section */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
               <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Past Assessments</h2>
@@ -1375,8 +2093,9 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
             </div>
           </Card>
         </div>
-        </>
-        ) : (
+        )}
+
+        {activeTab === "users" && userRole === "admin" && (
           <div className="space-y-6">
             <div>
               <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">User Management</h2>
@@ -1422,7 +2141,8 @@ Analyze raw financial data sent via JSON from a PHP/XAMPP backend. You must prov
                                 <SelectValue placeholder="Select role" />
                               </SelectTrigger>
                               <SelectContent className="dark:bg-slate-900 dark:border-slate-800">
-                                <SelectItem value="user" className="dark:text-slate-300 dark:focus:bg-slate-800">User</SelectItem>
+                                <SelectItem value="applicant" className="dark:text-slate-300 dark:focus:bg-slate-800">Applicant</SelectItem>
+                                <SelectItem value="officer" className="dark:text-slate-300 dark:focus:bg-slate-800">Officer</SelectItem>
                                 <SelectItem value="admin" className="dark:text-slate-300 dark:focus:bg-slate-800">Admin</SelectItem>
                               </SelectContent>
                             </Select>
