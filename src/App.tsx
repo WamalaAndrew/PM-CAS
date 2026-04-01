@@ -3,7 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, AlertCircle, CheckCircle2, ShieldAlert, FileText, Download, FileSpreadsheet, Search, Filter, UploadCloud, Trash2, LogOut, User as UserIcon, Users, Moon, Sun, DownloadCloud, RefreshCw, Plus, Circle, Calendar, ExternalLink } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle2, ShieldAlert, FileText, Download, FileSpreadsheet, Search, Filter, UploadCloud, Trash2, LogOut, User as UserIcon, Users, Moon, Sun, DownloadCloud, RefreshCw, Plus, Circle, Calendar, ExternalLink, ArrowUpDown } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { format, formatDistanceToNow } from "date-fns";
@@ -120,6 +120,7 @@ const taskFormSchema = z.object({
   description: z.string().optional(),
   dueDate: z.string().min(1, "Please select a due date."),
   assignedTo: z.string().min(1, "Please select an assignee."),
+  progress: z.coerce.number().min(0).max(100).default(0),
 });
 
 const officerReviewSchema = z.object({
@@ -144,6 +145,7 @@ type Task = {
   title: string;
   description?: string;
   status: "pending" | "completed";
+  progress: number;
   dueDate: string;
   assignedTo: string;
   createdAt: string;
@@ -175,11 +177,14 @@ export default function App() {
   const [pastAssessments, setPastAssessments] = useState<PastAssessment[]>([]);
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskSortBy, setTaskSortBy] = useState<'dueDate' | 'assignee'>('dueDate');
+  const [taskSortOrder, setTaskSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [taskToComplete, setTaskToComplete] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterDecision, setFilterDecision] = useState("ALL");
   const [isDragging, setIsDragging] = useState(false);
-  const [activeTab, setActiveTab] = useState<"assessments" | "users" | "applications" | "manual" | "profile" | "tasks">("applications");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "assessments" | "users" | "applications" | "manual" | "profile" | "tasks">("applications");
   
   const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
@@ -593,6 +598,7 @@ export default function App() {
         ...values,
         id: newTaskRef.id,
         status: "pending",
+        progress: values.progress || 0,
         createdAt: new Date().toISOString(),
       };
       await setDoc(newTaskRef, newTask);
@@ -1216,6 +1222,19 @@ Output ONLY the JSON object. No preamble, no closing remarks.
     );
   }
 
+  const sortedTasks = [...tasks].sort((a, b) => {
+    if (taskSortBy === 'dueDate') {
+      const dateA = new Date(a.dueDate).getTime();
+      const dateB = new Date(b.dueDate).getTime();
+      return taskSortOrder === 'asc' ? dateA - dateB : dateB - dateA;
+    } else if (taskSortBy === 'assignee') {
+      const nameA = allUsers.find(u => u.uid === a.assignedTo)?.displayName || '';
+      const nameB = allUsers.find(u => u.uid === b.assignedTo)?.displayName || '';
+      return taskSortOrder === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
+    }
+    return 0;
+  });
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 md:p-8 font-sans text-slate-900 dark:text-slate-50 transition-colors duration-300">
       <div className="max-w-5xl mx-auto space-y-8">
@@ -1229,7 +1248,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                 <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">PM-CAS</h1>
                 {userRole && (
                   <Badge variant={userRole === "admin" ? "destructive" : "secondary"} className="text-xs uppercase tracking-wider">
-                    {userRole === "admin" ? "Admin Interface" : "Loan Officer"}
+                    {userRole === "admin" ? "Admin Interface" : userRole.replace('_', ' ')}
                   </Badge>
                 )}
               </div>
@@ -1237,18 +1256,26 @@ Output ONLY the JSON object. No preamble, no closing remarks.
             </div>
           </div>
           
-          <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-end">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-between sm:justify-end min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={() => setIsDarkMode(!isDarkMode)}
-                className="text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-50"
+                className="text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-50 shrink-0"
               >
                 {isDarkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
               </Button>
               {userRole !== "applicant" && (
-                <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-lg overflow-x-auto scrollbar-hide max-w-[300px] sm:max-w-none">
+                <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-lg overflow-x-auto scrollbar-hide w-full sm:w-auto">
+                  {userRole === "loan_officer" && (
+                    <button
+                      onClick={() => setActiveTab("dashboard")}
+                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${activeTab === "dashboard" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                    >
+                      Dashboard
+                    </button>
+                  )}
                   {(userRole === "loan_officer" || userRole === "admin_assistant" || userRole === "credit_analyst" || userRole === "admin") && (
                     <button
                       onClick={() => setActiveTab("applications")}
@@ -1263,6 +1290,14 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                       className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${activeTab === "assessments" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
                     >
                       Analytics
+                    </button>
+                  )}
+                  {(userRole === "loan_officer" || userRole === "admin_assistant" || userRole === "credit_analyst" || userRole === "admin") && (
+                    <button
+                      onClick={() => setActiveTab("manual")}
+                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${activeTab === "manual" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                    >
+                      Data Entry
                     </button>
                   )}
                   {(userRole === "loan_officer" || userRole === "admin_assistant" || userRole === "admin") && (
@@ -1356,6 +1391,93 @@ Output ONLY the JSON object. No preamble, no closing remarks.
           </div>
         </header>
 
+        {activeTab === "dashboard" && userRole === "loan_officer" && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Loan Officer Dashboard</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Overview of your pending tasks and applications.</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-slate-500 dark:text-slate-400">Pending Applications</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                    {applications.filter(a => a.status === 'pending').length}
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-slate-500 dark:text-slate-400">Recent Assessments</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                    {pastAssessments.length}
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-slate-500 dark:text-slate-400">Assigned Tasks</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                    {tasks.filter(t => t.assignedTo === user?.uid && t.status !== 'completed').length}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <CardHeader>
+                  <CardTitle className="text-lg font-semibold text-slate-800 dark:text-slate-200">My Tasks</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {tasks.filter(t => t.assignedTo === user?.uid && t.status !== 'completed').slice(0, 5).map(task => (
+                      <div key={task.id} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800">
+                        <div>
+                          <p className="font-medium text-sm text-slate-900 dark:text-slate-100">{task.title}</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">Due: {format(new Date(task.dueDate), 'PP')}</p>
+                        </div>
+                        <Button variant="outline" size="sm" onClick={() => setActiveTab("tasks")}>View</Button>
+                      </div>
+                    ))}
+                    {tasks.filter(t => t.assignedTo === user?.uid && t.status !== 'completed').length === 0 && (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">No pending tasks assigned to you.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+              
+              <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <CardHeader>
+                  <CardTitle className="text-lg font-semibold text-slate-800 dark:text-slate-200">Recent Applications</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {applications.filter(a => a.status === 'pending').slice(0, 5).map(app => (
+                      <div key={app.id} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800">
+                        <div>
+                          <p className="font-medium text-sm text-slate-900 dark:text-slate-100">{app.applicant_name}</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">{app.loan_type} - ${app.loan_amount}</p>
+                        </div>
+                        <Button variant="outline" size="sm" onClick={() => setActiveTab("applications")}>View</Button>
+                      </div>
+                    ))}
+                    {applications.filter(a => a.status === 'pending').length === 0 && (
+                      <p className="text-sm text-slate-500 dark:text-slate-400">No pending applications.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        )}
+
         {activeTab === "applications" && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -1407,7 +1529,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                             render={({ field }) => (
                               <FormItem>
                                 <FormLabel>Loan Type</FormLabel>
-                                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                <Select onValueChange={field.onChange} value={field.value}>
                                   <FormControl>
                                     <SelectTrigger>
                                       <SelectValue placeholder="Select type" />
@@ -1499,7 +1621,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                             render={({ field }) => (
                               <FormItem>
                                 <FormLabel>Collateral Type</FormLabel>
-                                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                <Select onValueChange={field.onChange} value={field.value}>
                                   <FormControl>
                                     <SelectTrigger>
                                       <SelectValue placeholder="Select collateral" />
@@ -1682,7 +1804,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                                         render={({ field }) => (
                                           <FormItem>
                                             <FormLabel>CRB Status</FormLabel>
-                                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                            <Select onValueChange={field.onChange} value={field.value}>
                                               <FormControl>
                                                 <SelectTrigger>
                                                   <SelectValue placeholder="Select status" />
@@ -1896,22 +2018,24 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                   Enter raw financial data for Gemini-PHP Bridge analysis.
                 </CardDescription>
               </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="h-8 text-xs dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" />}>
-                  Load Sample Data
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="dark:bg-slate-900 dark:border-slate-800">
-                  <DropdownMenuItem onClick={() => loadSampleData('low')} className="dark:text-slate-300 dark:focus:bg-slate-800">
-                    Low Risk Profile
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => loadSampleData('borderline')} className="dark:text-slate-300 dark:focus:bg-slate-800">
-                    Borderline Profile
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => loadSampleData('high')} className="dark:text-slate-300 dark:focus:bg-slate-800">
-                    High Risk Profile
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {user?.email === "wamalaandrew632@gmail.com" && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="h-8 text-xs dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" />}>
+                    Load Sample Data
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="dark:bg-slate-900 dark:border-slate-800">
+                    <DropdownMenuItem onClick={() => loadSampleData('low')} className="dark:text-slate-300 dark:focus:bg-slate-800">
+                      Low Risk Profile
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => loadSampleData('borderline')} className="dark:text-slate-300 dark:focus:bg-slate-800">
+                      Borderline Profile
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => loadSampleData('high')} className="dark:text-slate-300 dark:focus:bg-slate-800">
+                      High Risk Profile
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </CardHeader>
             <CardContent className="pt-6">
               <Form {...form}>
@@ -1936,7 +2060,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel className="text-slate-700 dark:text-slate-300">Employment Type</FormLabel>
-                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <Select onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                               <SelectTrigger className="bg-white dark:bg-slate-950 dark:border-slate-800 dark:text-slate-100">
                                 <SelectValue placeholder="Select employment type" />
@@ -2122,10 +2246,10 @@ Output ONLY the JSON object. No preamble, no closing remarks.
               </Card>
             )}
 
-            {!result && !error && !isLoading && (
-              <Card className="h-full flex flex-col items-center justify-center text-center p-8 border-dashed border-2 border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 shadow-none">
+            {!isLoading && (
+              <Card className={`flex flex-col items-center justify-center text-center p-6 border-dashed border-2 border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 shadow-none ${!result ? 'h-full p-8' : 'mb-6'}`}>
                 <div 
-                  className={`w-full max-w-md p-8 border-2 border-dashed rounded-xl transition-colors cursor-pointer flex flex-col items-center justify-center mb-8 ${isDragging ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-900'}`}
+                  className={`w-full max-w-md p-6 border-2 border-dashed rounded-xl transition-colors cursor-pointer flex flex-col items-center justify-center ${!result ? 'mb-8' : ''} ${isDragging ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-900'}`}
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
@@ -2138,18 +2262,22 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                     accept=".json" 
                     onChange={handleFileChange} 
                   />
-                  <div className="p-4 bg-blue-50 dark:bg-blue-900/30 rounded-full mb-4">
-                    <UploadCloud className="w-8 h-8 text-blue-500 dark:text-blue-400" />
+                  <div className="p-3 bg-blue-50 dark:bg-blue-900/30 rounded-full mb-3">
+                    <UploadCloud className="w-6 h-6 text-blue-500 dark:text-blue-400" />
                   </div>
                   <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Drag & drop financial documents</h4>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">Support for JSON profile data</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">Support for JSON profile data</p>
                   <Button variant="outline" size="sm" className="text-xs dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>Browse Files</Button>
                 </div>
-                <ShieldAlert className="w-8 h-8 text-slate-300 dark:text-slate-700 mb-3" />
-                <h3 className="text-lg font-medium text-slate-700 dark:text-slate-300">Awaiting Data</h3>
-                <p className="text-sm text-slate-500 dark:text-slate-400 max-w-xs mt-2">
-                  Submit applicant financial data or upload documents to generate a high-precision risk assessment.
-                </p>
+                {!result && (
+                  <>
+                    <ShieldAlert className="w-8 h-8 text-slate-300 dark:text-slate-700 mb-3" />
+                    <h3 className="text-lg font-medium text-slate-700 dark:text-slate-300">Awaiting Data</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 max-w-xs mt-2">
+                      Submit applicant financial data or upload documents to generate a high-precision risk assessment.
+                    </p>
+                  </>
+                )}
               </Card>
             )}
 
@@ -2623,12 +2751,30 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                 <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Tasks & Follow-ups</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Manage your loan application related tasks.</p>
               </div>
-              <Dialog>
-                <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm" />}>
-                  <Plus className="w-4 h-4 mr-2" />
-                  New Task
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-[425px] dark:bg-slate-900 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Select value={taskSortBy} onValueChange={(v: any) => setTaskSortBy(v)}>
+                  <SelectTrigger className="w-[140px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-xs">
+                    <SelectValue placeholder="Sort by" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="dueDate">Due Date</SelectItem>
+                    <SelectItem value="assignee">Assignee</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button 
+                  variant="outline" 
+                  size="icon" 
+                  onClick={() => setTaskSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                  className="h-10 w-10 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                >
+                  <ArrowUpDown className="h-4 w-4 text-slate-500" />
+                </Button>
+                <Dialog>
+                  <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm" />}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    New Task
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-[425px] dark:bg-slate-900 dark:border-slate-800">
                   <DialogHeader>
                     <DialogTitle className="dark:text-slate-100">Create New Task</DialogTitle>
                     <DialogDescription className="dark:text-slate-400">Add a follow-up action for a loan application.</DialogDescription>
@@ -2641,7 +2787,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>Related Application</FormLabel>
-                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <Select onValueChange={field.onChange} value={field.value}>
                               <FormControl>
                                 <SelectTrigger>
                                   <SelectValue placeholder="Select application" />
@@ -2665,7 +2811,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>Assign To</FormLabel>
-                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <Select onValueChange={field.onChange} value={field.value}>
                               <FormControl>
                                 <SelectTrigger>
                                   <SelectValue placeholder="Select staff member" />
@@ -2711,6 +2857,19 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                       />
                       <FormField
                         control={taskForm.control}
+                        name="progress"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Progress (%)</FormLabel>
+                            <FormControl>
+                              <Input {...field} type="number" min="0" max="100" />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={taskForm.control}
                         name="dueDate"
                         render={({ field }) => (
                           <FormItem>
@@ -2733,21 +2892,28 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                 </DialogContent>
               </Dialog>
             </div>
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pending</h3>
-                {tasks.filter(t => t.status === 'pending').length === 0 ? (
+                {sortedTasks.filter(t => t.status === 'pending').length === 0 ? (
                   <p className="text-xs text-slate-400 italic">No pending tasks.</p>
                 ) : (
-                  tasks.filter(t => t.status === 'pending').map(task => (
+                  sortedTasks.filter(t => t.status === 'pending').map(task => (
                     <Card key={task.id} className="border-slate-200 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
                       <CardHeader className="pb-2">
                         <div className="flex justify-between items-start">
                           <CardTitle className="text-sm font-bold dark:text-slate-100">{task.title}</CardTitle>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleToggleTask(task.id, 'completed')}>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setTaskToComplete(task.id)}>
                             <Circle className="h-4 w-4 text-slate-400" />
                           </Button>
+                        </div>
+                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          Progress: {task.progress}%
+                          <div className="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full mt-1">
+                            <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: `${task.progress}%` }} />
+                          </div>
                         </div>
                       </CardHeader>
                       <CardContent className="pb-2">
@@ -2766,7 +2932,20 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                         </div>
                       </CardContent>
                       <CardFooter className="pt-0 flex justify-between items-center">
-                        <Badge variant="outline" className="text-[10px] bg-slate-50 dark:bg-slate-800">{task.applicationId}</Badge>
+                        <Button 
+                          variant="link" 
+                          className="text-[10px] p-0 h-auto text-blue-600 dark:text-blue-400 flex items-center gap-1"
+                          onClick={() => {
+                            const app = applications.find(a => a.id === task.applicationId);
+                            if (app) {
+                              setSelectedApplication(app);
+                              setIsReviewModalOpen(true);
+                            }
+                          }}
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          App: {task.applicationId.substring(0, 8)}...
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-6 w-6 text-red-500" onClick={() => handleDeleteTask(task.id)}>
                           <Trash2 className="h-3 w-3" />
                         </Button>
@@ -2778,10 +2957,10 @@ Output ONLY the JSON object. No preamble, no closing remarks.
 
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Completed</h3>
-                {tasks.filter(t => t.status === 'completed').length === 0 ? (
+                {sortedTasks.filter(t => t.status === 'completed').length === 0 ? (
                   <p className="text-xs text-slate-400 italic">No completed tasks.</p>
                 ) : (
-                  tasks.filter(t => t.status === 'completed').map(task => (
+                  sortedTasks.filter(t => t.status === 'completed').map(task => (
                     <Card key={task.id} className="border-slate-200 dark:border-slate-800 dark:bg-slate-900 shadow-sm opacity-75">
                       <CardHeader className="pb-2">
                         <div className="flex justify-between items-start">
@@ -2789,6 +2968,12 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleToggleTask(task.id, 'pending')}>
                             <CheckCircle2 className="h-4 w-4 text-green-500" />
                           </Button>
+                        </div>
+                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          Progress: {task.progress}%
+                          <div className="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full mt-1">
+                            <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: `${task.progress}%` }} />
+                          </div>
                         </div>
                       </CardHeader>
                       <CardContent className="pb-2">
@@ -2803,7 +2988,20 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                         </div>
                       </CardContent>
                       <CardFooter className="pt-0 flex justify-between items-center">
-                        <Badge variant="outline" className="text-[10px] bg-slate-50 dark:bg-slate-800">{task.applicationId}</Badge>
+                        <Button 
+                          variant="link" 
+                          className="text-[10px] p-0 h-auto text-slate-500 dark:text-slate-400 flex items-center gap-1"
+                          onClick={() => {
+                            const app = applications.find(a => a.id === task.applicationId);
+                            if (app) {
+                              setSelectedApplication(app);
+                              setIsReviewModalOpen(true);
+                            }
+                          }}
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          App: {task.applicationId.substring(0, 8)}...
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-6 w-6 text-red-500" onClick={() => handleDeleteTask(task.id)}>
                           <Trash2 className="h-3 w-3" />
                         </Button>
@@ -2813,6 +3011,26 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                 )}
               </div>
             </div>
+            
+            <Dialog open={!!taskToComplete} onOpenChange={(open) => !open && setTaskToComplete(null)}>
+              <DialogContent className="sm:max-w-[425px] dark:bg-slate-900 dark:border-slate-800">
+                <DialogHeader>
+                  <DialogTitle className="dark:text-slate-100">Confirm Task Completion</DialogTitle>
+                  <DialogDescription className="dark:text-slate-400">
+                    Are you sure you want to mark this task as completed?
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter className="mt-4">
+                  <Button variant="outline" onClick={() => setTaskToComplete(null)}>Cancel</Button>
+                  <Button onClick={() => {
+                    if (taskToComplete) {
+                      handleToggleTask(taskToComplete, 'completed');
+                      setTaskToComplete(null);
+                    }
+                  }}>Confirm</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </div>
         )}
 

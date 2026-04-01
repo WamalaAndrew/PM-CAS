@@ -54,11 +54,12 @@
         "title": { "type": "string" },
         "description": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "completed"] },
+        "progress": { "type": "number", "description": "Progress percentage (0-100)." },
         "dueDate": { "type": "string", "format": "date" },
         "assignedTo": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "applicationId", "title", "status", "assignedTo", "createdAt"]
+      "required": ["id", "applicationId", "title", "status", "progress", "assignedTo", "createdAt"]
     }
   },
   "firestore": {

@@ -144,13 +144,14 @@ service cloud.firestore {
     }
 
     function isValidTask(data) {
-      let allowedKeys = ['id', 'applicationId', 'title', 'description', 'status', 'dueDate', 'assignedTo', 'createdAt'];
+      let allowedKeys = ['id', 'applicationId', 'title', 'description', 'status', 'progress', 'dueDate', 'assignedTo', 'createdAt'];
       return request.resource.data.keys().hasOnly(allowedKeys) &&
-             hasRequiredFields(['id', 'applicationId', 'title', 'status', 'assignedTo', 'createdAt']) &&
+             hasRequiredFields(['id', 'applicationId', 'title', 'status', 'progress', 'assignedTo', 'createdAt']) &&
              data.id is string && data.applicationId is string &&
              data.title is string && data.title.size() > 0 &&
              (!('description' in data) || data.description is string) &&
              data.status in ['pending', 'completed'] &&
+             data.progress is number && data.progress >= 0 && data.progress <= 100 &&
              (!('dueDate' in data) || data.dueDate is string) &&
              data.assignedTo is string &&
              isValidDateString(data.createdAt);
@@ -184,6 +185,8 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || resource.data.applicant_id == request.auth.uid || isAdmin());
       
       allow create: if isAuthenticated() && 
+                       (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+                        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['loan_officer', 'admin', 'admin_assistant', 'credit_analyst']) &&
                        isValidAssessment(request.resource.data) && 
                        uidUnchanged();
                        
@@ -207,7 +210,7 @@ service cloud.firestore {
       
       allow create: if isAuthenticated() && 
                        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-                        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'applicant') &&
+                        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['applicant', 'loan_officer', 'admin', 'admin_assistant', 'credit_analyst']) &&
                        request.resource.data.uid == request.auth.uid &&
                        request.resource.data.applicant_id == request.auth.uid &&
                        isValidLoanApplication(request.resource.data);
