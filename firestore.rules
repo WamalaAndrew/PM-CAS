@@ -97,9 +97,15 @@ service cloud.firestore {
     }
 
     function isValidAssessment(data) {
-      let allowedKeys = ['assessment_id', 'applicant_name', 'applicant_id', 'date', 'credit_score', 'decision', 'risk_rating', 'key_findings', 'mitigation_suggestion', 'system_integrity_check', 'uid', 'admin_override', 'admin_uid', 'override_date'];
+      let allowedKeys = [
+        'assessment_id', 'applicant_name', 'applicant_id', 'date', 'credit_score', 
+        'decision', 'risk_rating', 'key_findings', 'mitigation_suggestion', 
+        'system_integrity_check', 'uid', 'admin_override', 'admin_uid', 'override_date',
+        'loan_type', 'five_cs_breakdown', 'officer_uid', 'officer_name', 'officer_email',
+        'loan_amount', 'business_sector', 'late_payments_count'
+      ];
       return request.resource.data.keys().hasOnly(allowedKeys) &&
-             hasRequiredFields(['assessment_id', 'applicant_name', 'applicant_id', 'date', 'credit_score', 'decision', 'risk_rating', 'key_findings', 'mitigation_suggestion', 'system_integrity_check', 'uid']) &&
+             hasRequiredFields(['assessment_id', 'applicant_name', 'applicant_id', 'date', 'credit_score', 'decision', 'risk_rating', 'key_findings', 'mitigation_suggestion', 'system_integrity_check', 'uid', 'loan_type', 'five_cs_breakdown']) &&
              data.assessment_id is string && data.assessment_id.size() > 0 && data.assessment_id.size() < 100 &&
              data.applicant_name is string && data.applicant_name.size() > 0 && data.applicant_name.size() < 100 &&
              data.applicant_id is string && data.applicant_id.size() > 0 && data.applicant_id.size() < 100 &&
@@ -111,6 +117,19 @@ service cloud.firestore {
              data.mitigation_suggestion is string && data.mitigation_suggestion.size() < 5000 &&
              data.system_integrity_check is string && data.system_integrity_check.size() < 500 &&
              data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             data.loan_type is string && data.loan_type.size() > 0 && data.loan_type.size() < 100 &&
+             data.five_cs_breakdown is map &&
+             data.five_cs_breakdown.character is map && data.five_cs_breakdown.character.score is number && data.five_cs_breakdown.character.assessment is string && data.five_cs_breakdown.character.findings is list &&
+             data.five_cs_breakdown.capacity is map && data.five_cs_breakdown.capacity.score is number && data.five_cs_breakdown.capacity.assessment is string && data.five_cs_breakdown.capacity.findings is list &&
+             data.five_cs_breakdown.capital is map && data.five_cs_breakdown.capital.score is number && data.five_cs_breakdown.capital.assessment is string && data.five_cs_breakdown.capital.findings is list &&
+             data.five_cs_breakdown.collateral is map && data.five_cs_breakdown.collateral.score is number && data.five_cs_breakdown.collateral.assessment is string && data.five_cs_breakdown.collateral.findings is list &&
+             data.five_cs_breakdown.conditions is map && data.five_cs_breakdown.conditions.score is number && data.five_cs_breakdown.conditions.assessment is string && data.five_cs_breakdown.conditions.findings is list &&
+             (!('officer_uid' in data) || (data.officer_uid is string && data.officer_uid.size() < 100)) &&
+             (!('officer_name' in data) || (data.officer_name is string && data.officer_name.size() < 100)) &&
+             (!('officer_email' in data) || (data.officer_email is string && data.officer_email.size() < 100)) &&
+             (!('loan_amount' in data) || (data.loan_amount is number && data.loan_amount >= 0)) &&
+             (!('business_sector' in data) || (data.business_sector is string && data.business_sector.size() < 100)) &&
+             (!('late_payments_count' in data) || (data.late_payments_count is number && data.late_payments_count >= 0)) &&
              (!('admin_override' in data) || data.admin_override is bool) &&
              (!('admin_uid' in data) || (data.admin_uid is string && data.admin_uid.size() < 100)) &&
              (!('override_date' in data) || isValidDateString(data.override_date));

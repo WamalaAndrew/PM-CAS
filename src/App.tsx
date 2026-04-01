@@ -525,7 +525,7 @@ export default function App() {
         ...data,
         applicant_id: selectedApplication.id,
         date: new Date().toISOString(),
-        uid: selectedApplication.uid,
+        uid: user.uid,
         officer_uid: user.uid,
         officer_name: user.displayName || "Unknown",
         officer_email: user.email || "Unknown",
@@ -534,12 +534,20 @@ export default function App() {
         late_payments_count: values.late_payments_count,
       };
       
-      await setDoc(assessmentRef, pastAssessment);
+      try {
+        await setDoc(assessmentRef, pastAssessment);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, "assessments");
+      }
       
-      await updateDoc(doc(db, "loanApplications", selectedApplication.id), {
-        status: "assessed",
-        assessment_id: assessmentRef.id,
-      });
+      try {
+        await updateDoc(doc(db, "loanApplications", selectedApplication.id), {
+          status: "assessed",
+          assessment_id: assessmentRef.id,
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, "loanApplications");
+      }
 
       setResult(data);
       setIsReviewModalOpen(false);
