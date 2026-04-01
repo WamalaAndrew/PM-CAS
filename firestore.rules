@@ -153,7 +153,7 @@ service cloud.firestore {
              data.group_guarantee is bool &&
              data.business_sector is string && data.business_sector.size() > 0 && data.business_sector.size() < 100 &&
              data.location is string && data.location.size() > 0 && data.location.size() < 200 &&
-             data.status in ['pending', 'assessed', 'approved', 'denied'] &&
+             data.status in ['pending', 'ready_for_analysis', 'assessed', 'approved', 'denied'] &&
              data.applicant_id is string && data.applicant_id.size() > 0 && data.applicant_id.size() < 100 &&
              data.applicant_name is string && data.applicant_name.size() > 0 && data.applicant_name.size() < 100 &&
              isValidEmail(data.applicant_email) &&
@@ -204,8 +204,11 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || resource.data.applicant_id == request.auth.uid || isAdmin());
       
       allow create: if isAuthenticated() && 
-                       (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-                        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['loan_officer', 'admin', 'admin_assistant', 'credit_analyst']) &&
+                       (
+                         isAdmin() ||
+                         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+                          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['loan_officer', 'admin', 'admin_assistant', 'credit_analyst'])
+                       ) &&
                        isValidAssessment(request.resource.data) && 
                        uidUnchanged();
                        

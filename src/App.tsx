@@ -135,7 +135,7 @@ type LoanApplication = z.infer<typeof applicantFormSchema> & {
   uid: string;
   applicant_name: string;
   applicant_email: string;
-  status: "pending" | "assessed" | "approved" | "denied";
+  status: "pending" | "ready_for_analysis" | "assessed" | "approved" | "denied";
   assessment_id?: string;
   createdAt: string;
 };
@@ -477,7 +477,11 @@ export default function App() {
         loan_type: selectedApplication.loan_type,
       };
 
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : undefined);
+      if (!apiKey) {
+        throw new Error("Gemini API Key is not configured. Please ensure VITE_GEMINI_API_KEY or GEMINI_API_KEY is set.");
+      }
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-3.1-pro-preview",
         contents: JSON.stringify(payload),
@@ -584,7 +588,7 @@ export default function App() {
     }
   };
 
-  const handleStatusUpdate = async (appId: string, newStatus: "approved" | "denied") => {
+  const handleStatusUpdate = async (appId: string, newStatus: "ready_for_analysis" | "approved" | "denied") => {
     try {
       const appRef = doc(db, "loanApplications", appId);
       await updateDoc(appRef, { status: newStatus });
@@ -745,7 +749,11 @@ export default function App() {
     const applicant_id = `APP-${Math.floor(100000 + Math.random() * 900000)}`;
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : undefined);
+      if (!apiKey) {
+        throw new Error("Gemini API Key is not configured. Please ensure VITE_GEMINI_API_KEY or GEMINI_API_KEY is set.");
+      }
+      const ai = new GoogleGenAI({ apiKey });
       
       const response = await ai.models.generateContent({
         model: "gemini-3.1-pro-preview",
@@ -887,166 +895,181 @@ export default function App() {
   };
 
   const exportToCSV = () => {
-    if (!result) return;
-    const headers = ["Assessment ID", "Applicant Name", "Credit Score", "Decision", "Risk Rating", "Key Findings", "Mitigation Suggestion"];
-    const row = [
-      result.assessment_id,
-      form.getValues("applicant_name"),
-      result.credit_score,
-      result.decision,
-      result.risk_rating,
-      result.key_findings.join("; "),
-      result.mitigation_suggestion
-    ];
-    const csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + row.map(e => `"${e}"`).join(",");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `assessment_${result.assessment_id}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      if (!result) return;
+      const headers = ["Assessment ID", "Applicant Name", "Credit Score", "Decision", "Risk Rating", "Key Findings", "Mitigation Suggestion"];
+      const row = [
+        result.assessment_id,
+        form.getValues("applicant_name"),
+        result.credit_score,
+        result.decision,
+        result.risk_rating,
+        result.key_findings.join("; "),
+        result.mitigation_suggestion
+      ];
+      const csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + row.map(e => `"${e}"`).join(",");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `assessment_${result.assessment_id}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      console.error("CSV Export Error:", err);
+      setError("Failed to export CSV: " + err.message);
+    }
   };
 
   const exportAllToCSV = () => {
-    if (pastAssessments.length === 0) return;
-    
-    const headers = [
-      "Date", 
-      "Assessment ID", 
-      "Applicant Name", 
-      "Credit Score", 
-      "Decision", 
-      "Risk Rating"
-    ];
-
-    if (userRole === "admin") {
-      headers.push("Loan Officer Name", "Loan Officer Email");
-    }
-    
-    const rows = pastAssessments.map(assessment => {
-      const row = [
-        format(new Date(assessment.date), 'yyyy-MM-dd HH:mm:ss'),
-        assessment.assessment_id,
-        assessment.applicant_name,
-        assessment.credit_score.toString(),
-        assessment.decision,
-        assessment.risk_rating
+    try {
+      if (pastAssessments.length === 0) return;
+      
+      const headers = [
+        "Date", 
+        "Assessment ID", 
+        "Applicant Name", 
+        "Credit Score", 
+        "Decision", 
+        "Risk Rating"
       ];
 
       if (userRole === "admin") {
-        const officerName = assessment.officer_name || (allUsers.find(u => u.uid === assessment.uid)?.displayName) || 'Unknown Officer';
-        const officerEmail = assessment.officer_email || (allUsers.find(u => u.uid === assessment.uid)?.email) || 'Unknown Email';
-        row.push(officerName, officerEmail);
+        headers.push("Loan Officer Name", "Loan Officer Email");
       }
-
-      return row;
-    });
-    
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + headers.join(",") + "\n" 
-      + rows.map(row => row.map(e => `"${String(e).replace(/"/g, '""')}"`).join(",")).join("\n");
       
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `pmcas_assessments_${format(new Date(), 'yyyyMMdd_HHmmss')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      const rows = pastAssessments.map(assessment => {
+        const row = [
+          format(new Date(assessment.date), 'yyyy-MM-dd HH:mm:ss'),
+          assessment.assessment_id,
+          assessment.applicant_name,
+          assessment.credit_score.toString(),
+          assessment.decision,
+          assessment.risk_rating
+        ];
+
+        if (userRole === "admin") {
+          const officerName = assessment.officer_name || (allUsers.find(u => u.uid === assessment.uid)?.displayName) || 'Unknown Officer';
+          const officerEmail = assessment.officer_email || (allUsers.find(u => u.uid === assessment.uid)?.email) || 'Unknown Email';
+          row.push(officerName, officerEmail);
+        }
+
+        return row;
+      });
+      
+      const csvContent = "data:text/csv;charset=utf-8," 
+        + headers.join(",") + "\n" 
+        + rows.map(row => row.map(e => `"${String(e).replace(/"/g, '""')}"`).join(",")).join("\n");
+        
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `pmcas_assessments_${format(new Date(), 'yyyyMMdd_HHmmss')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      console.error("All CSV Export Error:", err);
+      setError("Failed to export all assessments to CSV: " + err.message);
+    }
   };
 
   const generatePDFReport = (assessment: AssessmentResult, applicantName: string, dateStr: string) => {
-    const doc = new jsPDF();
-    
-    // Header
-    doc.setFillColor(37, 99, 235); // blue-600
-    doc.rect(0, 0, 210, 40, 'F');
-    
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(24);
-    doc.setFont("helvetica", "bold");
-    doc.text("PM-CAS", 14, 20);
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "normal");
-    doc.text("Pride Microfinance Credit Analytics System", 14, 28);
-    
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(14);
-    doc.text("Credit Assessment Report", 140, 24);
-    
-    // Details
-    doc.setTextColor(50, 50, 50);
-    doc.setFontSize(11);
-    doc.text(`Assessment ID: ${assessment.assessment_id}`, 14, 50);
-    doc.text(`Applicant Name: ${applicantName}`, 14, 58);
-    doc.text(`Date: ${dateStr}`, 14, 66);
-    
-    // Status Badge Simulation
-    let decisionColor = [100, 116, 139]; // Default slate
-    if (assessment.decision === 'APPROVE') decisionColor = [34, 197, 94]; // green
-    if (assessment.decision === 'DENY') decisionColor = [239, 68, 68]; // red
-    if (assessment.decision === 'REFER TO COMMITTEE') decisionColor = [245, 158, 11]; // amber
-    
-    doc.setFillColor(decisionColor[0], decisionColor[1], decisionColor[2]);
-    doc.rect(140, 45, 55, 10, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("helvetica", "bold");
-    doc.text(assessment.decision, 167.5, 51.5, { align: 'center' });
+    try {
+      const doc = new jsPDF();
+      
+      // Header
+      doc.setFillColor(37, 99, 235); // blue-600
+      doc.rect(0, 0, 210, 40, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(24);
+      doc.setFont("helvetica", "bold");
+      doc.text("PM-CAS", 14, 20);
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "normal");
+      doc.text("Pride Microfinance Credit Analytics System", 14, 28);
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.text("Credit Assessment Report", 140, 24);
+      
+      // Details
+      doc.setTextColor(50, 50, 50);
+      doc.setFontSize(11);
+      doc.text(`Assessment ID: ${assessment.assessment_id}`, 14, 50);
+      doc.text(`Applicant Name: ${applicantName}`, 14, 58);
+      doc.text(`Date: ${dateStr}`, 14, 66);
+      
+      // Status Badge Simulation
+      let decisionColor = [100, 116, 139]; // Default slate
+      if (assessment.decision === 'APPROVE') decisionColor = [34, 197, 94]; // green
+      if (assessment.decision === 'DENY') decisionColor = [239, 68, 68]; // red
+      if (assessment.decision === 'REFER TO COMMITTEE') decisionColor = [245, 158, 11]; // amber
+      
+      doc.setFillColor(decisionColor[0], decisionColor[1], decisionColor[2]);
+      doc.rect(140, 45, 55, 10, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.text(assessment.decision, 167.5, 51.5, { align: 'center' });
 
-    doc.setTextColor(50, 50, 50);
-    doc.setFont("helvetica", "normal");
+      doc.setTextColor(50, 50, 50);
+      doc.setFont("helvetica", "normal");
 
-    autoTable(doc, {
-      startY: 75,
-      head: [['Metric', 'Value']],
-      body: [
-        ['Credit Score', assessment.credit_score.toString() + ' / 100'],
-        ['Risk Rating', assessment.risk_rating],
-      ],
-      headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42] },
-      theme: 'grid'
-    });
+      autoTable(doc, {
+        startY: 75,
+        head: [['Metric', 'Value']],
+        body: [
+          ['Credit Score', assessment.credit_score.toString() + ' / 100'],
+          ['Risk Rating', assessment.risk_rating],
+        ],
+        headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42] },
+        theme: 'grid'
+      });
 
-    const fiveCsBody = Object.entries(assessment.five_cs_breakdown).map(([c, details]: [string, any]) => [
-      c.toUpperCase(),
-      `${details.score} pts`,
-      details.assessment,
-      details.findings.join('\n')
-    ]);
+      const fiveCsBody = Object.entries(assessment.five_cs_breakdown).map(([c, details]: [string, any]) => [
+        c.toUpperCase(),
+        `${details.score} pts`,
+        details.assessment,
+        details.findings.join('\n')
+      ]);
 
-    autoTable(doc, {
-      startY: (doc as any).lastAutoTable.finalY + 10,
-      head: [['5 Cs of Credit', 'Score', 'Assessment', 'Findings']],
-      body: fiveCsBody,
-      headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42] },
-      theme: 'grid'
-    });
+      autoTable(doc, {
+        startY: (doc as any).lastAutoTable.finalY + 10,
+        head: [['5 Cs of Credit', 'Score', 'Assessment', 'Findings']],
+        body: fiveCsBody,
+        headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42] },
+        theme: 'grid'
+      });
 
-    autoTable(doc, {
-      startY: (doc as any).lastAutoTable.finalY + 10,
-      head: [['Key Findings']],
-      body: assessment.key_findings.map(finding => [finding]),
-      headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42] },
-      theme: 'grid'
-    });
+      autoTable(doc, {
+        startY: (doc as any).lastAutoTable.finalY + 10,
+        head: [['Key Findings']],
+        body: assessment.key_findings.map(finding => [finding]),
+        headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42] },
+        theme: 'grid'
+      });
 
-    autoTable(doc, {
-      startY: (doc as any).lastAutoTable.finalY + 10,
-      head: [['Mitigation Suggestion']],
-      body: [[assessment.mitigation_suggestion]],
-      headStyles: { fillColor: [239, 246, 255], textColor: [30, 58, 138] },
-      theme: 'grid'
-    });
-    
-    // Footer
-    const pageHeight = doc.internal.pageSize.height || doc.internal.pageSize.getHeight();
-    doc.setFontSize(9);
-    doc.setTextColor(150, 150, 150);
-    doc.text(`System Integrity: ${assessment.system_integrity_check}`, 14, pageHeight - 15);
-    doc.text(`Generated on: ${format(new Date(), 'PPpp')}`, 14, pageHeight - 10);
+      autoTable(doc, {
+        startY: (doc as any).lastAutoTable.finalY + 10,
+        head: [['Mitigation Suggestion']],
+        body: [[assessment.mitigation_suggestion]],
+        headStyles: { fillColor: [239, 246, 255], textColor: [30, 58, 138] },
+        theme: 'grid'
+      });
+      
+      // Footer
+      const pageHeight = doc.internal.pageSize.height || doc.internal.pageSize.getHeight();
+      doc.setFontSize(9);
+      doc.setTextColor(150, 150, 150);
+      doc.text(`System Integrity: ${assessment.system_integrity_check}`, 14, pageHeight - 15);
+      doc.text(`Generated on: ${format(new Date(), 'PPpp')}`, 14, pageHeight - 10);
 
-    doc.save(`PMCAS_Report_${assessment.assessment_id}.pdf`);
+      doc.save(`PMCAS_Report_${assessment.assessment_id}.pdf`);
+    } catch (err: any) {
+      console.error("PDF Generation Error:", err);
+      setError("Failed to generate PDF: " + err.message);
+    }
   };
 
   const exportToPDF = () => {
@@ -1227,7 +1250,7 @@ export default function App() {
                       Analytics
                     </button>
                   )}
-                  {(userRole === "loan_officer" || userRole === "admin_assistant" || userRole === "credit_analyst" || userRole === "admin") && (
+                  {(userRole === "credit_analyst" || userRole === "admin") && (
                     <button
                       onClick={() => setActiveTab("manual")}
                       className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${activeTab === "manual" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
@@ -1398,7 +1421,7 @@ export default function App() {
                       <div key={app.id} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800">
                         <div>
                           <p className="font-medium text-sm text-slate-900 dark:text-slate-100">{app.applicant_name}</p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">{app.loan_type} - {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(app.loan_amount)}</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">{app.loan_type} - {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'UGX' }).format(app.loan_amount)}</p>
                         </div>
                         <Button variant="outline" size="sm" onClick={() => setActiveTab("applications")}>View</Button>
                       </div>
@@ -1694,7 +1717,7 @@ export default function App() {
                             {app.loan_type}
                           </TableCell>
                           <TableCell className="text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                            {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(app.loan_amount)}
+                            {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'UGX' }).format(app.loan_amount)}
                           </TableCell>
                           <TableCell className="whitespace-nowrap">
                             <Badge variant={app.status === "pending" ? "secondary" : app.status === "approved" ? "default" : app.status === "denied" ? "destructive" : "outline"}>
@@ -1702,7 +1725,17 @@ export default function App() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right whitespace-nowrap">
-                            {userRole !== "applicant" && app.status === "pending" && (
+                            {userRole === "loan_officer" && app.status === "pending" && (
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="h-8 text-xs bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-900/50 hover:bg-blue-100 dark:hover:bg-blue-900/50" 
+                                onClick={() => handleStatusUpdate(app.id, "ready_for_analysis")}
+                              >
+                                Verify
+                              </Button>
+                            )}
+                            {(userRole === "credit_analyst" || userRole === "admin") && app.status === "ready_for_analysis" && (
                               <Dialog open={isReviewModalOpen && selectedApplication?.id === app.id} onOpenChange={(open) => {
                                 setIsReviewModalOpen(open);
                                 if (open) setSelectedApplication(app);
