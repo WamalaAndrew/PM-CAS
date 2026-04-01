@@ -83,15 +83,17 @@ service cloud.firestore {
     // ===============================================================
 
     function isValidUser(data) {
-      let allowedKeys = ['uid', 'email', 'displayName', 'photoURL', 'role', 'createdAt'];
+      let allowedKeys = ['uid', 'email', 'displayName', 'photoURL', 'role', 'createdAt', 'phone', 'address'];
       return request.resource.data.keys().hasOnly(allowedKeys) &&
              hasRequiredFields(['uid', 'email', 'role', 'createdAt']) &&
              data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
              isValidEmail(data.email) && data.email.size() < 100 &&
              (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
              (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 500)) &&
-             data.role in ['admin', 'user', 'officer', 'applicant'] &&
-             isValidDateString(data.createdAt);
+             data.role in ['admin', 'loan_officer', 'admin_assistant', 'credit_analyst', 'applicant'] &&
+             isValidDateString(data.createdAt) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() < 20)) &&
+             (!('address' in data) || (data.address is string && data.address.size() < 500));
     }
 
     function isValidAssessment(data) {
@@ -115,9 +117,10 @@ service cloud.firestore {
     }
 
     function isValidLoanApplication(data) {
-      let allowedKeys = ['loan_type', 'loan_amount', 'loan_purpose', 'monthly_income', 'savings_balance', 'employment_tenure_months', 'collateral_type', 'collateral_value', 'group_guarantee', 'business_sector', 'location', 'status', 'applicant_id', 'applicant_name', 'applicant_email', 'createdAt', 'assessment_id', 'uid'];
+      let allowedKeys = ['id', 'loan_type', 'loan_amount', 'loan_purpose', 'monthly_income', 'savings_balance', 'employment_tenure_months', 'collateral_type', 'collateral_value', 'collateral_valuation_date', 'collateral_location', 'group_guarantee', 'business_sector', 'location', 'status', 'applicant_id', 'applicant_name', 'applicant_email', 'createdAt', 'assessment_id', 'uid'];
       return request.resource.data.keys().hasOnly(allowedKeys) &&
-             hasRequiredFields(['loan_type', 'loan_amount', 'loan_purpose', 'monthly_income', 'savings_balance', 'employment_tenure_months', 'collateral_type', 'collateral_value', 'group_guarantee', 'business_sector', 'location', 'status', 'applicant_id', 'applicant_name', 'applicant_email', 'createdAt', 'uid']) &&
+             hasRequiredFields(['id', 'loan_type', 'loan_amount', 'loan_purpose', 'monthly_income', 'savings_balance', 'employment_tenure_months', 'collateral_type', 'collateral_value', 'collateral_valuation_date', 'collateral_location', 'group_guarantee', 'business_sector', 'location', 'status', 'applicant_id', 'applicant_name', 'applicant_email', 'createdAt', 'uid']) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
              data.loan_type is string && data.loan_type.size() > 0 && data.loan_type.size() < 100 &&
              data.loan_amount is number && data.loan_amount >= 1000 &&
              data.loan_purpose is string && data.loan_purpose.size() >= 5 && data.loan_purpose.size() < 1000 &&
@@ -126,6 +129,8 @@ service cloud.firestore {
              data.employment_tenure_months is number && data.employment_tenure_months >= 0 &&
              data.collateral_type is string && data.collateral_type.size() > 0 && data.collateral_type.size() < 100 &&
              data.collateral_value is number && data.collateral_value >= 0 &&
+             data.collateral_valuation_date is string && data.collateral_valuation_date.size() > 0 &&
+             data.collateral_location is string && data.collateral_location.size() > 0 &&
              data.group_guarantee is bool &&
              data.business_sector is string && data.business_sector.size() > 0 && data.business_sector.size() < 100 &&
              data.location is string && data.location.size() > 0 && data.location.size() < 200 &&
@@ -138,6 +143,19 @@ service cloud.firestore {
              (!('assessment_id' in data) || (data.assessment_id is string && data.assessment_id.size() < 100));
     }
 
+    function isValidTask(data) {
+      let allowedKeys = ['id', 'applicationId', 'title', 'description', 'status', 'dueDate', 'assignedTo', 'createdAt'];
+      return request.resource.data.keys().hasOnly(allowedKeys) &&
+             hasRequiredFields(['id', 'applicationId', 'title', 'status', 'assignedTo', 'createdAt']) &&
+             data.id is string && data.applicationId is string &&
+             data.title is string && data.title.size() > 0 &&
+             (!('description' in data) || data.description is string) &&
+             data.status in ['pending', 'completed'] &&
+             (!('dueDate' in data) || data.dueDate is string) &&
+             data.assignedTo is string &&
+             isValidDateString(data.createdAt);
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -146,10 +164,11 @@ service cloud.firestore {
       allow read: if isOwner(userId) || isAdmin();
       
       allow create: if isAuthenticated() && 
-                       isOwner(userId) && 
                        isValidUser(request.resource.data) && 
-                       uidUnchanged() &&
-                       ((request.resource.data.role in ['user', 'applicant']) || isAdmin());
+                       (
+                         (isOwner(userId) && uidUnchanged() && (request.resource.data.role in ['user', 'applicant'])) || 
+                         isAdmin()
+                       );
                        
       allow update: if isAuthenticated() && 
                        (isOwner(userId) || isAdmin()) && 
@@ -162,7 +181,7 @@ service cloud.firestore {
     }
 
     match /assessments/{assessmentId} {
-      allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || resource.data.applicant_id == request.auth.uid || isAdmin());
       
       allow create: if isAuthenticated() && 
                        isValidAssessment(request.resource.data) && 
@@ -178,18 +197,46 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
     }
     match /loanApplications/{applicationId} {
-      allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || resource.data.applicant_id == request.auth.uid || isAdmin() || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'officer'));
+      allow read: if isAuthenticated() && (
+        resource.data.uid == request.auth.uid || 
+        resource.data.applicant_id == request.auth.uid || 
+        isAdmin() || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['loan_officer', 'admin_assistant', 'credit_analyst'])
+      );
       
       allow create: if isAuthenticated() && 
+                       (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+                        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'applicant') &&
                        request.resource.data.uid == request.auth.uid &&
                        request.resource.data.applicant_id == request.auth.uid &&
                        isValidLoanApplication(request.resource.data);
                        
       allow update: if isAuthenticated() && 
-                       (isAdmin() || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'officer')) && 
+                       (isAdmin() || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'loan_officer')) && 
                        isValidLoanApplication(request.resource.data) && 
                        request.resource.data.uid == resource.data.uid &&
                        request.resource.data.applicant_id == resource.data.applicant_id &&
+                       request.resource.data.createdAt == resource.data.createdAt;
+                       
+      allow delete: if isAdmin();
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['loan_officer', 'admin_assistant'])
+      );
+      
+      allow create: if isAuthenticated() && 
+                       (isAdmin() || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'loan_officer')) && 
+                       isValidTask(request.resource.data);
+                       
+      allow update: if isAuthenticated() && 
+                       (isAdmin() || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'loan_officer')) && 
+                       isValidTask(request.resource.data) &&
+                       request.resource.data.id == resource.data.id &&
                        request.resource.data.createdAt == resource.data.createdAt;
                        
       allow delete: if isAdmin();

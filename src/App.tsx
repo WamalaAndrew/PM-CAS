@@ -1,13 +1,14 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { GoogleGenAI, Type } from "@google/genai";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, AlertCircle, CheckCircle2, ShieldAlert, FileText, Download, FileSpreadsheet, Search, Filter, UploadCloud, Trash2, LogOut, User as UserIcon, Users, Moon, Sun, DownloadCloud, RefreshCw } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle2, ShieldAlert, FileText, Download, FileSpreadsheet, Search, Filter, UploadCloud, Trash2, LogOut, User as UserIcon, Users, Moon, Sun, DownloadCloud, RefreshCw, Plus, Circle, Calendar, ExternalLink } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { format, formatDistanceToNow } from "date-fns";
-import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, User } from "firebase/auth";
+import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
+import type { User } from "firebase/auth";
 import { doc, setDoc, getDoc, collection, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, deleteDoc } from "firebase/firestore";
 import { auth, db, handleFirestoreError, OperationType } from "./firebase";
 
@@ -22,15 +23,16 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuGroup } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuGroup, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuPortal, DropdownMenuSubContent } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend, LineChart, Line, AreaChart, Area } from "recharts";
 
 const formSchema = z.object({
   applicant_name: z.string().min(2, {
@@ -82,8 +84,12 @@ type PastAssessment = AssessmentResult & {
   applicant_id: string;
   date: string;
   uid?: string;
+  officer_uid?: string;
   officer_name?: string;
   officer_email?: string;
+  loan_amount?: number;
+  business_sector?: string;
+  late_payments_count?: number;
 };
 
 const applicantFormSchema = z.object({
@@ -95,9 +101,25 @@ const applicantFormSchema = z.object({
   employment_tenure_months: z.coerce.number().min(0, "Cannot be negative."),
   collateral_type: z.string().min(1, "Please select collateral type."),
   collateral_value: z.coerce.number().min(0, "Cannot be negative."),
+  collateral_valuation_date: z.string().min(1, "Please specify valuation date."),
+  collateral_location: z.string().min(1, "Please specify collateral location."),
   group_guarantee: z.boolean().default(false),
   business_sector: z.string().min(1, "Please specify business sector."),
   location: z.string().min(1, "Please specify location."),
+});
+
+const profileFormSchema = z.object({
+  displayName: z.string().min(2, "Name must be at least 2 characters."),
+  phone: z.string().min(10, "Phone number must be at least 10 characters."),
+  address: z.string().min(5, "Address must be at least 5 characters."),
+});
+
+const taskFormSchema = z.object({
+  applicationId: z.string().min(1, "Please select an application."),
+  title: z.string().min(3, "Title must be at least 3 characters."),
+  description: z.string().optional(),
+  dueDate: z.string().min(1, "Please select a due date."),
+  assignedTo: z.string().min(1, "Please select an assignee."),
 });
 
 const officerReviewSchema = z.object({
@@ -110,15 +132,40 @@ type LoanApplication = z.infer<typeof applicantFormSchema> & {
   id: string;
   uid: string;
   applicant_name: string;
+  applicant_email: string;
   status: "pending" | "assessed" | "approved" | "denied";
   assessment_id?: string;
   createdAt: string;
 };
 
+type Task = {
+  id: string;
+  applicationId: string;
+  title: string;
+  description?: string;
+  status: "pending" | "completed";
+  dueDate: string;
+  assignedTo: string;
+  createdAt: string;
+};
+
+type UserProfile = {
+  uid: string;
+  email: string;
+  displayName?: string;
+  photoURL?: string;
+  role: "admin" | "loan_officer" | "admin_assistant" | "credit_analyst" | "applicant";
+  createdAt: string;
+  phone?: string;
+  address?: string;
+};
+
+const COLORS = ['#22c55e', '#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899'];
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [userRole, setUserRole] = useState<"admin" | "officer" | "applicant" | null>(null);
-  const [actualRole, setActualRole] = useState<"admin" | "officer" | "applicant" | null>(null);
+  const [userRole, setUserRole] = useState<UserProfile["role"] | null>(null);
+  const [actualRole, setActualRole] = useState<UserProfile["role"] | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
@@ -127,14 +174,16 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [pastAssessments, setPastAssessments] = useState<PastAssessment[]>([]);
   const [applications, setApplications] = useState<LoanApplication[]>([]);
-  const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterDecision, setFilterDecision] = useState("ALL");
   const [isDragging, setIsDragging] = useState(false);
-  const [activeTab, setActiveTab] = useState<"assessments" | "users" | "applications" | "manual">("applications");
+  const [activeTab, setActiveTab] = useState<"assessments" | "users" | "applications" | "manual" | "profile" | "tasks">("applications");
   
   const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [selectedApplication, setSelectedApplication] = useState<LoanApplication | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('pmcas-dark-mode');
@@ -183,15 +232,16 @@ export default function App() {
           } else {
             const currentRole = userSnap.data().role;
             let mappedRole = currentRole;
-            if (currentRole === "user") mappedRole = "officer";
+            // Migration: if role is 'officer', map to 'loan_officer'
+            if (currentRole === "officer" || currentRole === "user") mappedRole = "loan_officer";
             
             if (isBootstrapAdmin && mappedRole !== "admin") {
               await updateDoc(userRef, { role: "admin" });
               setUserRole("admin");
               setActualRole("admin");
             } else {
-              setUserRole(mappedRole as "admin" | "officer" | "applicant");
-              setActualRole(mappedRole as "admin" | "officer" | "applicant");
+              setUserRole(mappedRole as UserProfile["role"]);
+              setActualRole(mappedRole as UserProfile["role"]);
             }
           }
         } catch (e) {
@@ -214,12 +264,12 @@ export default function App() {
     if (!isAuthReady || !user || !userRole) return;
 
     let q;
-    if (userRole === "admin") {
+    if (userRole === "admin" || userRole === "credit_analyst") {
       q = query(collection(db, "assessments"), orderBy("date", "desc"));
     } else {
       q = query(
         collection(db, "assessments"),
-        where("uid", "==", user.uid),
+        where("officer_uid", "==", user.uid),
         orderBy("date", "desc")
       );
     }
@@ -261,7 +311,7 @@ export default function App() {
     if (!isAuthReady || !user || !userRole) return;
 
     let q;
-    if (userRole === "admin" || userRole === "officer") {
+    if (userRole === "admin" || userRole === "loan_officer" || userRole === "admin_assistant" || userRole === "credit_analyst") {
       q = query(collection(db, "loanApplications"), orderBy("createdAt", "desc"));
     } else {
       q = query(
@@ -284,6 +334,32 @@ export default function App() {
     return () => unsubscribe();
   }, [user, isAuthReady, userRole]);
 
+  // Firestore Data Listener for Tasks
+  useEffect(() => {
+    if (!isAuthReady || !user || !userRole) return;
+
+    let q;
+    if (userRole === "admin" || userRole === "loan_officer" || userRole === "admin_assistant") {
+      q = query(collection(db, "tasks"), orderBy("createdAt", "desc"));
+    } else {
+      // Applicants don't see tasks for now, or maybe only their own?
+      // For now, only staff see tasks.
+      return;
+    }
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const taskList: Task[] = [];
+      snapshot.forEach((doc) => {
+        taskList.push(doc.data() as Task);
+      });
+      setTasks(taskList);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, "tasks");
+    });
+
+    return () => unsubscribe();
+  }, [user, isAuthReady, userRole]);
+
   const applicantForm = useForm<z.infer<typeof applicantFormSchema>>({
     resolver: zodResolver(applicantFormSchema) as any,
     defaultValues: {
@@ -295,11 +371,47 @@ export default function App() {
       employment_tenure_months: 0,
       collateral_type: "",
       collateral_value: 0,
+      collateral_valuation_date: format(new Date(), "yyyy-MM-dd"),
+      collateral_location: "",
       group_guarantee: false,
       business_sector: "",
       location: "",
     },
   });
+
+  const profileForm = useForm<z.infer<typeof profileFormSchema>>({
+    resolver: zodResolver(profileFormSchema) as any,
+    defaultValues: {
+      displayName: "",
+      phone: "",
+      address: "",
+    },
+  });
+
+  const taskForm = useForm<z.infer<typeof taskFormSchema>>({
+    resolver: zodResolver(taskFormSchema) as any,
+    defaultValues: {
+      applicationId: "",
+      title: "",
+      description: "",
+      dueDate: format(new Date(), "yyyy-MM-dd"),
+      assignedTo: "",
+    },
+  });
+
+  // Sync profile form when user data changes
+  useEffect(() => {
+    if (user && allUsers.length > 0) {
+      const currentUserProfile = allUsers.find(u => u.uid === user.uid);
+      if (currentUserProfile) {
+        profileForm.reset({
+          displayName: currentUserProfile.displayName || user.displayName || "",
+          phone: currentUserProfile.phone || "",
+          address: currentUserProfile.address || "",
+        });
+      }
+    }
+  }, [user, allUsers]);
 
   const officerForm = useForm<z.infer<typeof officerReviewSchema>>({
     resolver: zodResolver(officerReviewSchema) as any,
@@ -385,8 +497,12 @@ export default function App() {
         applicant_id: selectedApplication.id,
         date: new Date().toISOString(),
         uid: selectedApplication.uid,
+        officer_uid: user.uid,
         officer_name: user.displayName || "Unknown",
         officer_email: user.email || "Unknown",
+        loan_amount: selectedApplication.loan_amount,
+        business_sector: selectedApplication.business_sector,
+        late_payments_count: values.late_payments_count,
       };
       
       await setDoc(assessmentRef, pastAssessment);
@@ -440,12 +556,72 @@ export default function App() {
     }
   };
 
-  const handleRoleChange = async (uid: string, newRole: string) => {
+  const handleRoleChange = async (uid: string, newRole: UserProfile["role"]) => {
     try {
       const userRef = doc(db, "users", uid);
       await updateDoc(userRef, { role: newRole });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `users/${uid}`);
+    }
+  };
+
+  const handleProfileUpdate = async (values: z.infer<typeof profileFormSchema>) => {
+    if (!user) return;
+    setIsLoading(true);
+    try {
+      const userRef = doc(db, "users", user.uid);
+      await updateDoc(userRef, {
+        displayName: values.displayName,
+        phone: values.phone,
+        address: values.address,
+      });
+      setError(null);
+      // Success toast or alert would be nice, but I'll just clear error
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `users/${user.uid}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const onTaskSubmit = async (values: z.infer<typeof taskFormSchema>) => {
+    if (!user) return;
+    setIsLoading(true);
+    try {
+      const newTaskRef = doc(collection(db, "tasks"));
+      const newTask: Task = {
+        ...values,
+        id: newTaskRef.id,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      await setDoc(newTaskRef, newTask);
+      setIsTaskModalOpen(false);
+      taskForm.reset();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, "tasks");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleToggleTask = async (taskId: string, currentStatus: "pending" | "completed") => {
+    try {
+      const taskRef = doc(db, "tasks", taskId);
+      await updateDoc(taskRef, {
+        status: currentStatus === "pending" ? "completed" : "pending"
+      });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `tasks/${taskId}`);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      const taskRef = doc(db, "tasks", taskId);
+      await deleteDoc(taskRef);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `tasks/${taskId}`);
     }
   };
 
@@ -937,6 +1113,53 @@ Output ONLY the JSON object. No preamble, no closing remarks.
     generatePDFReport(result, form.getValues("applicant_name"), format(new Date(), 'PPpp'));
   };
 
+  const analyticsData = useMemo(() => {
+    if (pastAssessments.length === 0) return null;
+
+    // 1. Approval Rates by Loan Type
+    const loanTypes = Array.from(new Set(pastAssessments.map(a => a.loan_type)));
+    const approvalByLoanType = loanTypes.map(type => {
+      const typeAssessments = pastAssessments.filter(a => a.loan_type === type);
+      const approvedCount = typeAssessments.filter(a => a.decision === 'APPROVE').length;
+      return {
+        name: type,
+        approvalRate: Math.round((approvedCount / typeAssessments.length) * 100)
+      };
+    });
+
+    // 2. Average Loan Amounts by Sector
+    const sectors = Array.from(new Set(pastAssessments.map(a => a.business_sector).filter(Boolean)));
+    const avgAmountBySector = sectors.map(sector => {
+      const sectorAssessments = pastAssessments.filter(a => a.business_sector === sector);
+      const totalAmount = sectorAssessments.reduce((sum, a) => sum + (a.loan_amount || 0), 0);
+      return {
+        name: sector,
+        avgAmount: Math.round(totalAmount / sectorAssessments.length)
+      };
+    });
+
+    // 3. Delinquency Rates (Proxy: late_payments_count > 0)
+    const delinquentCount = pastAssessments.filter(a => (a.late_payments_count || 0) > 0).length;
+    const delinquencyData = [
+      { name: 'Delinquent', value: delinquentCount },
+      { name: 'On Time', value: pastAssessments.length - delinquentCount }
+    ];
+
+    // 4. Decision Distribution
+    const decisions = ['APPROVE', 'DENY', 'REFER TO COMMITTEE'];
+    const decisionDistribution = decisions.map(d => ({
+      name: d,
+      value: pastAssessments.filter(a => a.decision === d).length
+    }));
+
+    return {
+      approvalByLoanType,
+      avgAmountBySector,
+      delinquencyData,
+      decisionDistribution
+    };
+  }, [pastAssessments]);
+
   const filteredAssessments = pastAssessments.filter(assessment => {
     const matchesSearch = assessment.applicant_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           assessment.assessment_id.toLowerCase().includes(searchQuery.toLowerCase());
@@ -1025,32 +1248,38 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                 {isDarkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
               </Button>
               {userRole !== "applicant" && (
-                <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-lg">
-                  <button
-                    onClick={() => setActiveTab("applications")}
-                    className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${activeTab === "applications" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
-                  >
-                    Applications
-                  </button>
-                  <button
-                    onClick={() => setActiveTab("assessments")}
-                    className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${activeTab === "assessments" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
-                  >
-                    Assessments
-                  </button>
-                  <button
-                    onClick={() => setActiveTab("manual")}
-                    className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors ${activeTab === "manual" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
-                  >
-                    Manual
-                  </button>
+                <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-lg overflow-x-auto scrollbar-hide max-w-[300px] sm:max-w-none">
+                  {(userRole === "loan_officer" || userRole === "admin_assistant" || userRole === "credit_analyst" || userRole === "admin") && (
+                    <button
+                      onClick={() => setActiveTab("applications")}
+                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${activeTab === "applications" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                    >
+                      Applications
+                    </button>
+                  )}
+                  {userRole === "admin" && (
+                    <button
+                      onClick={() => setActiveTab("assessments")}
+                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${activeTab === "assessments" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                    >
+                      Analytics
+                    </button>
+                  )}
+                  {(userRole === "loan_officer" || userRole === "admin_assistant" || userRole === "admin") && (
+                    <button
+                      onClick={() => setActiveTab("tasks")}
+                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${activeTab === "tasks" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                    >
+                      Tasks
+                    </button>
+                  )}
                   {userRole === "admin" && (
                     <button
                       onClick={() => setActiveTab("users")}
-                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === "users" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors flex items-center gap-2 whitespace-nowrap ${activeTab === "users" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
                     >
                       <Users className="w-4 h-4 hidden sm:block" />
-                      Users
+                      User Management
                     </button>
                   )}
                 </div>
@@ -1067,6 +1296,13 @@ Output ONLY the JSON object. No preamble, no closing remarks.
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56 dark:bg-slate-900 dark:border-slate-800" align="end">
                 <DropdownMenuGroup>
+                  <DropdownMenuItem onClick={() => setActiveTab("profile")}>
+                    <UserIcon className="mr-2 h-4 w-4" />
+                    <span>Profile</span>
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator className="dark:bg-slate-800" />
+                <DropdownMenuGroup>
                   <DropdownMenuLabel className="font-normal">
                     <div className="flex flex-col space-y-1">
                       <p className="text-sm font-medium leading-none dark:text-slate-100">{user.displayName}</p>
@@ -1080,17 +1316,36 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                   </DropdownMenuLabel>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator className="dark:bg-slate-800" />
-                {actualRole === "admin" && (
-                  <DropdownMenuItem 
-                    onClick={() => {
-                      setUserRole(userRole === "admin" ? "user" : "admin");
-                      if (userRole === "admin") setActiveTab("assessments");
-                    }} 
-                    className="cursor-pointer focus:bg-slate-100 dark:focus:bg-slate-800"
-                  >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    <span>View as {userRole === "admin" ? "Loan Officer" : "Admin"}</span>
-                  </DropdownMenuItem>
+                {(actualRole === "admin" || actualRole === "loan_officer") && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger className="cursor-pointer focus:bg-slate-100 dark:focus:bg-slate-800">
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      <span>View as Role</span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuPortal>
+                      <DropdownMenuSubContent className="dark:bg-slate-900 dark:border-slate-800">
+                        <DropdownMenuItem onClick={() => { setUserRole("applicant"); setActiveTab("applications"); }} className="cursor-pointer">
+                          Applicant
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setUserRole("loan_officer"); setActiveTab("applications"); }} className="cursor-pointer">
+                          Loan Officer
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setUserRole("credit_analyst"); setActiveTab("applications"); }} className="cursor-pointer">
+                          Credit Analyst
+                        </DropdownMenuItem>
+                        {actualRole === "admin" && (
+                          <>
+                            <DropdownMenuItem onClick={() => { setUserRole("admin_assistant"); setActiveTab("applications"); }} className="cursor-pointer">
+                              Admin Assistant
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => { setUserRole("admin"); setActiveTab("assessments"); }} className="cursor-pointer">
+                              Admin
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuPortal>
+                  </DropdownMenuSub>
                 )}
                 <DropdownMenuItem onClick={handleLogout} className="text-red-600 dark:text-red-400 cursor-pointer focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950 dark:hover:bg-slate-800">
                   <LogOut className="mr-2 h-4 w-4" />
@@ -1133,10 +1388,8 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                 </Select>
                 {userRole === "applicant" && (
                   <Dialog open={isApplyModalOpen} onOpenChange={setIsApplyModalOpen}>
-                    <DialogTrigger asChild>
-                      <Button className="bg-blue-600 hover:bg-blue-700 text-white">
-                        Apply for Loan
-                      </Button>
+                    <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white" />}>
+                      Apply for Loan
                     </DialogTrigger>
                   <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
@@ -1279,6 +1532,32 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                           />
                           <FormField
                             control={applicantForm.control}
+                            name="collateral_valuation_date"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Valuation Date</FormLabel>
+                                <FormControl>
+                                  <Input type="date" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
+                            name="collateral_location"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Collateral Location</FormLabel>
+                                <FormControl>
+                                  <Input {...field} placeholder="e.g. Plot 123, Kampala" />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={applicantForm.control}
                             name="business_sector"
                             render={({ field }) => (
                               <FormItem>
@@ -1372,8 +1651,8 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                                 if (open) setSelectedApplication(app);
                                 else setSelectedApplication(null);
                               }}>
-                                <DialogTrigger asChild>
-                                  <Button size="sm" variant="outline">Review</Button>
+                                <DialogTrigger render={<Button size="sm" variant="outline" />}>
+                                  Review
                                 </DialogTrigger>
                                 <DialogContent>
                                   <DialogHeader>
@@ -1469,6 +1748,72 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                 {userRole === "admin" ? "Global Analytics" : "My Analytics"}
               </h2>
             </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+              <Card className="border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <CardHeader>
+                  <CardTitle className="text-sm font-medium dark:text-slate-100">Approval Rate by Loan Type</CardTitle>
+                </CardHeader>
+                <CardContent className="h-[300px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={Object.entries(applications.reduce((acc, app) => {
+                      if (!acc[app.loan_type]) acc[app.loan_type] = { total: 0, approved: 0 };
+                      acc[app.loan_type].total++;
+                      if (app.status === 'Approved') acc[app.loan_type].approved++;
+                      return acc;
+                    }, {} as Record<string, { total: number, approved: number }>)).map(([type, stats]) => ({
+                      name: type,
+                      rate: (stats as { total: number, approved: number }).total > 0 ? Math.round(((stats as { total: number, approved: number }).approved / (stats as { total: number, approved: number }).total) * 100) : 0
+                    }))}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="name" fontSize={10} axisLine={false} tickLine={false} />
+                      <YAxis fontSize={10} axisLine={false} tickLine={false} unit="%" />
+                      <RechartsTooltip 
+                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#f8fafc' }}
+                        itemStyle={{ color: '#60a5fa' }}
+                      />
+                      <Bar dataKey="rate" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <CardHeader>
+                  <CardTitle className="text-sm font-medium dark:text-slate-100">Loan Distribution by Sector</CardTitle>
+                </CardHeader>
+                <CardContent className="h-[300px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={Object.entries(applications.reduce((acc, app) => {
+                          acc[app.business_sector] = (acc[app.business_sector] || 0) + app.loan_amount;
+                          return acc;
+                        }, {} as Record<string, number>)).map(([sector, amount]) => ({
+                          name: sector,
+                          value: amount
+                        }))}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'].map((color, index) => (
+                          <Cell key={`cell-${index}`} fill={color} />
+                        ))}
+                      </Pie>
+                      <RechartsTooltip 
+                        formatter={(value: number) => `UGX ${value.toLocaleString()}`}
+                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#f8fafc' }}
+                      />
+                      <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-8">
               <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
                 <CardHeader className="pb-2">
@@ -1591,7 +1936,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel className="text-slate-700 dark:text-slate-300">Employment Type</FormLabel>
-                          <Select onValueChange={field.onChange} value={field.value}>
+                          <Select onValueChange={field.onChange} defaultValue={field.value}>
                             <FormControl>
                               <SelectTrigger className="bg-white dark:bg-slate-950 dark:border-slate-800 dark:text-slate-100">
                                 <SelectValue placeholder="Select employment type" />
@@ -1939,7 +2284,100 @@ Output ONLY the JSON object. No preamble, no closing remarks.
         )}
 
         {activeTab === "assessments" && (
-        <div className="space-y-6">
+        <div className="space-y-8">
+          {/* Analytics Dashboard Section */}
+          {analyticsData && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card className="p-6 border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-6">Approval Rate by Loan Type (%)</h3>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={analyticsData.approvalByLoanType}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="name" fontSize={10} tick={{ fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <YAxis domain={[0, 100]} fontSize={10} tick={{ fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <RechartsTooltip 
+                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#f8fafc' }}
+                        itemStyle={{ color: '#3b82f6' }}
+                      />
+                      <Bar dataKey="approvalRate" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={40} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+
+              <Card className="p-6 border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-6">Decision Distribution</h3>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={analyticsData.decisionDistribution}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {analyticsData.decisionDistribution.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <RechartsTooltip 
+                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#f8fafc' }}
+                      />
+                      <Legend verticalAlign="bottom" height={36} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+
+              <Card className="p-6 border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-6">Average Loan Amount by Sector</h3>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={analyticsData.avgAmountBySector} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                      <XAxis type="number" fontSize={10} tick={{ fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <YAxis dataKey="name" type="category" fontSize={10} tick={{ fill: '#64748b' }} axisLine={false} tickLine={false} width={100} />
+                      <RechartsTooltip 
+                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#f8fafc' }}
+                      />
+                      <Bar dataKey="avgAmount" fill="#8b5cf6" radius={[0, 4, 4, 0]} barSize={20} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+
+              <Card className="p-6 border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-6">Delinquency Status</h3>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={analyticsData.delinquencyData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        <Cell fill="#ef4444" />
+                        <Cell fill="#22c55e" />
+                      </Pie>
+                      <RechartsTooltip 
+                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#f8fafc' }}
+                      />
+                      <Legend verticalAlign="bottom" height={36} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+            </div>
+          )}
+
           {/* Past Assessments Section */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <div>
@@ -2142,7 +2580,9 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                               </SelectTrigger>
                               <SelectContent className="dark:bg-slate-900 dark:border-slate-800">
                                 <SelectItem value="applicant" className="dark:text-slate-300 dark:focus:bg-slate-800">Applicant</SelectItem>
-                                <SelectItem value="officer" className="dark:text-slate-300 dark:focus:bg-slate-800">Officer</SelectItem>
+                                <SelectItem value="loan_officer" className="dark:text-slate-300 dark:focus:bg-slate-800">Loan Officer</SelectItem>
+                                <SelectItem value="admin_assistant" className="dark:text-slate-300 dark:focus:bg-slate-800">Admin Assistant</SelectItem>
+                                <SelectItem value="credit_analyst" className="dark:text-slate-300 dark:focus:bg-slate-800">Credit Analyst</SelectItem>
                                 <SelectItem value="admin" className="dark:text-slate-300 dark:focus:bg-slate-800">Admin</SelectItem>
                               </SelectContent>
                             </Select>
@@ -2172,6 +2612,303 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                   </TableBody>
                 </Table>
               </div>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === "tasks" && (userRole === "admin" || userRole === "loan_officer" || userRole === "admin_assistant" || userRole === "credit_analyst") && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Tasks & Follow-ups</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">Manage your loan application related tasks.</p>
+              </div>
+              <Dialog>
+                <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm" />}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  New Task
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-[425px] dark:bg-slate-900 dark:border-slate-800">
+                  <DialogHeader>
+                    <DialogTitle className="dark:text-slate-100">Create New Task</DialogTitle>
+                    <DialogDescription className="dark:text-slate-400">Add a follow-up action for a loan application.</DialogDescription>
+                  </DialogHeader>
+                  <Form {...taskForm}>
+                    <form onSubmit={taskForm.handleSubmit(onTaskSubmit)} className="space-y-4">
+                      <FormField
+                        control={taskForm.control}
+                        name="applicationId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Related Application</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select application" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {applications.map(app => (
+                                  <SelectItem key={app.id} value={app.id}>
+                                    {app.applicant_name} ({app.id})
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={taskForm.control}
+                        name="assignedTo"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Assign To</FormLabel>
+                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select staff member" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {allUsers.filter(u => u.role !== 'applicant').map(u => (
+                                  <SelectItem key={u.uid} value={u.uid}>
+                                    {u.displayName || u.email} ({u.role.replace('_', ' ')})
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={taskForm.control}
+                        name="title"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Task Title</FormLabel>
+                            <FormControl>
+                              <Input {...field} placeholder="e.g. Call applicant for missing ID" />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={taskForm.control}
+                        name="description"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Description</FormLabel>
+                            <FormControl>
+                              <Textarea {...field} placeholder="Details about the task..." />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={taskForm.control}
+                        name="dueDate"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Due Date</FormLabel>
+                            <FormControl>
+                              <Input type="date" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <DialogFooter>
+                        <Button type="submit" disabled={isLoading}>
+                          {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                          Create Task
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </Form>
+                </DialogContent>
+              </Dialog>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pending</h3>
+                {tasks.filter(t => t.status === 'pending').length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">No pending tasks.</p>
+                ) : (
+                  tasks.filter(t => t.status === 'pending').map(task => (
+                    <Card key={task.id} className="border-slate-200 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
+                      <CardHeader className="pb-2">
+                        <div className="flex justify-between items-start">
+                          <CardTitle className="text-sm font-bold dark:text-slate-100">{task.title}</CardTitle>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleToggleTask(task.id, 'completed')}>
+                            <Circle className="h-4 w-4 text-slate-400" />
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pb-2">
+                        <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">{task.description}</p>
+                        <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px] text-slate-500">
+                          <div className="flex items-center gap-1">
+                            <Calendar className="w-3 h-3" />
+                            <span>Due: {format(new Date(task.dueDate), 'PP')}</span>
+                          </div>
+                          {task.assignedTo && (
+                            <div className="flex items-center gap-1">
+                              <UserIcon className="w-3 h-3" />
+                              <span>Assigned: {allUsers.find(u => u.uid === task.assignedTo)?.displayName || 'Unknown'}</span>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                      <CardFooter className="pt-0 flex justify-between items-center">
+                        <Badge variant="outline" className="text-[10px] bg-slate-50 dark:bg-slate-800">{task.applicationId}</Badge>
+                        <Button variant="ghost" size="icon" className="h-6 w-6 text-red-500" onClick={() => handleDeleteTask(task.id)}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </CardFooter>
+                    </Card>
+                  ))
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Completed</h3>
+                {tasks.filter(t => t.status === 'completed').length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">No completed tasks.</p>
+                ) : (
+                  tasks.filter(t => t.status === 'completed').map(task => (
+                    <Card key={task.id} className="border-slate-200 dark:border-slate-800 dark:bg-slate-900 shadow-sm opacity-75">
+                      <CardHeader className="pb-2">
+                        <div className="flex justify-between items-start">
+                          <CardTitle className="text-sm font-bold dark:text-slate-100 line-through text-slate-500">{task.title}</CardTitle>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleToggleTask(task.id, 'pending')}>
+                            <CheckCircle2 className="h-4 w-4 text-green-500" />
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pb-2">
+                        <p className="text-xs text-slate-500 dark:text-slate-500 line-clamp-2">{task.description}</p>
+                        <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
+                          {task.assignedTo && (
+                            <div className="flex items-center gap-1">
+                              <UserIcon className="w-3 h-3" />
+                              <span>Assigned: {allUsers.find(u => u.uid === task.assignedTo)?.displayName || 'Unknown'}</span>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                      <CardFooter className="pt-0 flex justify-between items-center">
+                        <Badge variant="outline" className="text-[10px] bg-slate-50 dark:bg-slate-800">{task.applicationId}</Badge>
+                        <Button variant="ghost" size="icon" className="h-6 w-6 text-red-500" onClick={() => handleDeleteTask(task.id)}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </CardFooter>
+                    </Card>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "profile" && (
+          <div className="max-w-2xl mx-auto space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">My Profile</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Manage your personal information and account settings.</p>
+            </div>
+
+            <Card className="border-slate-200 dark:border-slate-800 dark:bg-slate-900">
+              <CardHeader>
+                <div className="flex items-center gap-4">
+                  <Avatar className="h-16 w-16 border-2 border-blue-100 dark:border-blue-900">
+                    <AvatarImage src={user.photoURL || ''} />
+                    <AvatarFallback className="text-xl bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
+                      {user.displayName?.charAt(0) || user.email?.charAt(0)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <CardTitle className="text-lg dark:text-slate-100">{user.displayName}</CardTitle>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">{user.email}</p>
+                    <Badge className="mt-2 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 border-none">
+                      {userRole.replace('_', ' ').toUpperCase()}
+                    </Badge>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Form {...profileForm}>
+                  <form onSubmit={profileForm.handleSubmit(handleProfileUpdate)} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <FormField
+                        control={profileForm.control}
+                        name="displayName"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Full Name</FormLabel>
+                            <FormControl>
+                              <Input {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={profileForm.control}
+                        name="phone"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Phone Number</FormLabel>
+                            <FormControl>
+                              <Input {...field} placeholder="+256..." />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    <FormField
+                      control={profileForm.control}
+                      name="address"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Physical Address</FormLabel>
+                          <FormControl>
+                            <Textarea {...field} placeholder="Your current residence..." />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <div className="pt-4">
+                      <Button type="submit" disabled={isLoading} className="w-full sm:w-auto">
+                        {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Save Changes
+                      </Button>
+                    </div>
+                  </form>
+                </Form>
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 dark:border-slate-800 dark:bg-slate-900 bg-slate-50/50 dark:bg-slate-950/50">
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold dark:text-slate-100">Account Security</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
+                  Your account is secured via Google Authentication. To change your password or security settings, please visit your Google Account.
+                </p>
+                <Button variant="outline" className="text-xs" onClick={() => window.open('https://myaccount.google.com/security', '_blank')}>
+                  Manage Google Account
+                  <ExternalLink className="ml-2 h-3 w-3" />
+                </Button>
+              </CardContent>
             </Card>
           </div>
         )}
