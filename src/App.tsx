@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { GoogleGenAI, Type } from "@google/genai";
+import { SYSTEM_INSTRUCTION } from "./constants";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -401,6 +402,7 @@ export default function App() {
       description: "",
       dueDate: format(new Date(), "yyyy-MM-dd"),
       assignedTo: "",
+      progress: 0,
     },
   });
 
@@ -475,26 +477,48 @@ export default function App() {
         loan_type: selectedApplication.loan_type,
       };
 
-      const res = await fetch("/api/assess", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-pro-preview",
+        contents: JSON.stringify(payload),
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              assessment_id: { type: Type.STRING },
+              applicant_name: { type: Type.STRING },
+              loan_type: { type: Type.STRING },
+              credit_score: { type: Type.INTEGER },
+              decision: { type: Type.STRING, enum: ["APPROVE", "DENY", "REFER TO COMMITTEE"] },
+              risk_rating: { type: Type.STRING, enum: ["Low", "Moderate", "High", "Critical"] },
+              five_cs_breakdown: {
+                type: Type.OBJECT,
+                properties: {
+                  character: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] },
+                  capacity: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] },
+                  capital: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] },
+                  collateral: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] },
+                  conditions: { type: Type.OBJECT, properties: { score: { type: Type.INTEGER }, assessment: { type: Type.STRING }, findings: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["score", "assessment", "findings"] }
+                },
+                required: ["character", "capacity", "capital", "collateral", "conditions"]
+              },
+              key_findings: { type: Type.ARRAY, items: { type: Type.STRING } },
+              mitigation_suggestion: { type: Type.STRING },
+              system_integrity_check: { type: Type.STRING }
+            },
+            required: ["assessment_id", "applicant_name", "loan_type", "credit_score", "decision", "risk_rating", "five_cs_breakdown", "key_findings", "mitigation_suggestion", "system_integrity_check"]
+          }
+        }
       });
 
-      if (!res.ok) {
-        let errorMessage = `API error: ${res.statusText}`;
-        try {
-          const errorData = await res.json();
-          if (errorData.error) {
-            errorMessage = errorData.error;
-          }
-        } catch (e) {
-          // Ignore JSON parse error if response is not JSON
-        }
-        throw new Error(errorMessage);
+      const resultText = response.text;
+      if (!resultText) {
+        throw new Error("No response from Gemini API");
       }
 
-      const data = await res.json();
+      const data = JSON.parse(resultText);
       
       const assessmentRef = doc(collection(db, "assessments"));
       const pastAssessment: PastAssessment = {
@@ -1463,7 +1487,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                       <div key={app.id} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800">
                         <div>
                           <p className="font-medium text-sm text-slate-900 dark:text-slate-100">{app.applicant_name}</p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">{app.loan_type} - ${app.loan_amount}</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">{app.loan_type} - {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(app.loan_amount)}</p>
                         </div>
                         <Button variant="outline" size="sm" onClick={() => setActiveTab("applications")}>View</Button>
                       </div>
@@ -1759,7 +1783,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                             {app.loan_type}
                           </TableCell>
                           <TableCell className="text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                            {app.loan_amount.toLocaleString()}
+                            {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(app.loan_amount)}
                           </TableCell>
                           <TableCell className="whitespace-nowrap">
                             <Badge variant={app.status === "pending" ? "secondary" : app.status === "approved" ? "default" : app.status === "denied" ? "destructive" : "outline"}>
@@ -2702,7 +2726,7 @@ Output ONLY the JSON object. No preamble, no closing remarks.
                           </TableCell>
                           <TableCell className="text-slate-600 dark:text-slate-400 whitespace-nowrap">{u.email}</TableCell>
                           <TableCell className="whitespace-nowrap">
-                            <Select value={u.role} onValueChange={(value) => handleRoleChange(u.uid, value)}>
+                            <Select value={u.role || ""} onValueChange={(value) => handleRoleChange(u.uid, value)}>
                               <SelectTrigger className="w-[120px] bg-white dark:bg-slate-950 dark:border-slate-800 dark:text-slate-100">
                                 <SelectValue placeholder="Select role" />
                               </SelectTrigger>
