@@ -91,6 +91,9 @@ type PastAssessment = AssessmentResult & {
   loan_amount?: number;
   business_sector?: string;
   late_payments_count?: number;
+  admin_override?: boolean;
+  admin_uid?: string;
+  override_date?: string;
 };
 
 const applicantFormSchema = z.object({
@@ -138,6 +141,7 @@ type LoanApplication = z.infer<typeof applicantFormSchema> & {
   status: "pending" | "ready_for_analysis" | "assessed" | "approved" | "denied";
   assessment_id?: string;
   createdAt: string;
+  assigned_to?: string;
 };
 
 type Task = {
@@ -597,6 +601,15 @@ export default function App() {
     }
   };
 
+  const handleAssignApplication = async (appId: string, officerUid: string) => {
+    try {
+      const appRef = doc(db, "loanApplications", appId);
+      await updateDoc(appRef, { assigned_to: officerUid });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `loanApplications/${appId}`);
+    }
+  };
+
   const handleRoleChange = async (uid: string, newRole: UserProfile["role"]) => {
     try {
       const userRef = doc(db, "users", uid);
@@ -647,11 +660,11 @@ export default function App() {
     }
   };
 
-  const handleToggleTask = async (taskId: string, currentStatus: "pending" | "completed") => {
+  const handleToggleTask = async (taskId: string, newStatus: "pending" | "completed") => {
     try {
       const taskRef = doc(db, "tasks", taskId);
       await updateDoc(taskRef, {
-        status: currentStatus === "pending" ? "completed" : "pending"
+        status: newStatus
       });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `tasks/${taskId}`);
@@ -683,8 +696,9 @@ export default function App() {
       const assessmentRef = doc(db, "assessments", assessmentId);
       await updateDoc(assessmentRef, { 
         decision: newDecision,
-        overriddenBy: user?.uid,
-        overrideDate: new Date().toISOString()
+        admin_override: true,
+        admin_uid: user?.uid,
+        override_date: new Date().toISOString()
       });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `assessments/${assessmentId}`);
@@ -992,7 +1006,9 @@ export default function App() {
       
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(14);
-      doc.text("Credit Assessment Report", 140, 24);
+      doc.text("Credit Assessment Report", 140, 20);
+      doc.setFontSize(10);
+      doc.text(`Applicant: ${applicantName}`, 140, 28);
       
       // Details
       doc.setTextColor(50, 50, 50);
@@ -2737,7 +2753,7 @@ export default function App() {
                 >
                   <ArrowUpDown className="h-4 w-4 text-slate-500" />
                 </Button>
-                <Dialog>
+                <Dialog open={isTaskModalOpen} onOpenChange={setIsTaskModalOpen}>
                   <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm" />}>
                     <Plus className="w-4 h-4 mr-2" />
                     New Task
