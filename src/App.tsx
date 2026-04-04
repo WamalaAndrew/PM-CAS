@@ -12,6 +12,7 @@ import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from
 import type { User } from "firebase/auth";
 import { doc, setDoc, getDoc, collection, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, deleteDoc } from "firebase/firestore";
 import { auth, db, handleFirestoreError, OperationType } from "./firebase";
+import { AmortizationCalculator } from "./components/AmortizationCalculator";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -142,6 +143,8 @@ type LoanApplication = z.infer<typeof applicantFormSchema> & {
   assessment_id?: string;
   createdAt: string;
   assigned_to?: string;
+  attachments?: { name: string; url: string; type: string; uploadedAt: string; uploadedBy: string }[];
+  audit_trail?: { action: string; timestamp: string; userId: string; userName: string; details?: string }[];
 };
 
 type Task = {
@@ -193,6 +196,8 @@ export default function App() {
   
   const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [selectedApplication, setSelectedApplication] = useState<LoanApplication | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -447,6 +452,12 @@ export default function App() {
         applicant_email: user.email || "unknown@example.com",
         status: "pending",
         createdAt: new Date().toISOString(),
+        audit_trail: [{
+          action: "Application submitted",
+          timestamp: new Date().toISOString(),
+          userId: user.uid,
+          userName: user.displayName || "Unknown"
+        }]
       };
       await setDoc(newAppRef, newApp);
       setIsApplyModalOpen(false);
@@ -549,9 +560,18 @@ export default function App() {
       }
       
       try {
-        await updateDoc(doc(db, "loanApplications", selectedApplication.id), {
+        const appRef = doc(db, "loanApplications", selectedApplication.id);
+        const appDoc = await getDoc(appRef);
+        const currentAudit = appDoc.exists() ? (appDoc.data().audit_trail || []) : [];
+        await updateDoc(appRef, {
           status: "assessed",
           assessment_id: assessmentRef.id,
+          audit_trail: [...currentAudit, {
+            action: "Application assessed by AI",
+            timestamp: new Date().toISOString(),
+            userId: user.uid,
+            userName: user.displayName || "Unknown"
+          }]
         });
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, "loanApplications");
@@ -595,9 +615,77 @@ export default function App() {
   const handleStatusUpdate = async (appId: string, newStatus: "ready_for_analysis" | "approved" | "denied") => {
     try {
       const appRef = doc(db, "loanApplications", appId);
-      await updateDoc(appRef, { status: newStatus });
+      const appDoc = await getDoc(appRef);
+      if (appDoc.exists()) {
+        const currentAudit = appDoc.data().audit_trail || [];
+        await updateDoc(appRef, { 
+          status: newStatus,
+          audit_trail: [...currentAudit, {
+            action: `Status changed to ${newStatus}`,
+            timestamp: new Date().toISOString(),
+            userId: user?.uid || 'unknown',
+            userName: user?.displayName || 'Unknown User'
+          }]
+        });
+      }
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `loanApplications/${appId}`);
+    }
+  };
+
+  const handleFileUpload = async (appId: string, file: File) => {
+    if (!user) return;
+    
+    // 500KB limit for Firestore document size constraints
+    const MAX_FILE_SIZE = 500 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+      setError("File is too large. Since we are using the free database tier, please keep files under 500KB.");
+      return;
+    }
+
+    setUploadingDoc(true);
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      
+      reader.onload = async () => {
+        const base64Url = reader.result as string;
+        
+        const appRef = doc(db, "loanApplications", appId);
+        const appDoc = await getDoc(appRef);
+        
+        if (appDoc.exists()) {
+          const currentAttachments = appDoc.data().attachments || [];
+          const currentAudit = appDoc.data().audit_trail || [];
+          
+          await updateDoc(appRef, {
+            attachments: [...currentAttachments, {
+              name: file.name,
+              url: base64Url,
+              type: file.type,
+              uploadedAt: new Date().toISOString(),
+              uploadedBy: user.displayName || 'Unknown User'
+            }],
+            audit_trail: [...currentAudit, {
+              action: `Document attached: ${file.name}`,
+              timestamp: new Date().toISOString(),
+              userId: user.uid,
+              userName: user.displayName || 'Unknown User'
+            }]
+          });
+        }
+        setUploadingDoc(false);
+      };
+      
+      reader.onerror = (error) => {
+        console.error("File reading error:", error);
+        setError("Failed to read file.");
+        setUploadingDoc(false);
+      };
+    } catch (error) {
+      console.error("Upload error:", error);
+      setError("Failed to attach document.");
+      setUploadingDoc(false);
     }
   };
 
@@ -1291,6 +1379,14 @@ export default function App() {
                       User Management
                     </button>
                   )}
+                  {(userRole === "admin" || userRole === "loan_officer" || userRole === "credit_analyst") && (
+                    <button
+                      onClick={() => setActiveTab("calculator")}
+                      className={`px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${activeTab === "calculator" ? "bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-400 shadow-sm" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-50"}`}
+                    >
+                      Calculator
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1459,19 +1555,19 @@ export default function App() {
                 <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Loan Applications</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">View and manage loan applications.</p>
               </div>
-              <div className="flex items-center gap-4">
-                <div className="relative">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="relative w-full sm:w-auto">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500 dark:text-slate-400" />
                   <Input
                     type="search"
-                    placeholder="Search applicant name or ID..."
-                    className="pl-8 w-[250px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                    placeholder="Search..."
+                    className="pl-8 w-full sm:w-[250px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
                 </div>
                 <Select value={filterDecision} onValueChange={setFilterDecision}>
-                  <SelectTrigger className="w-[180px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
+                  <SelectTrigger className="w-full sm:w-[180px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
                     <SelectValue placeholder="Filter by status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1496,7 +1592,7 @@ export default function App() {
                     </DialogHeader>
                     <Form {...applicantForm}>
                       <form onSubmit={applicantForm.handleSubmit(onApplySubmit)} className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <FormField
                             control={applicantForm.control}
                             name="loan_type"
@@ -1740,7 +1836,18 @@ export default function App() {
                               {app.status}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-right whitespace-nowrap">
+                          <TableCell className="text-right whitespace-nowrap space-x-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs"
+                              onClick={() => {
+                                setSelectedApplication(app);
+                                setIsDetailsModalOpen(true);
+                              }}
+                            >
+                              Details
+                            </Button>
                             {userRole === "loan_officer" && app.status === "pending" && (
                               <Button 
                                 size="sm" 
@@ -1843,6 +1950,107 @@ export default function App() {
                 </Table>
               </div>
             </Card>
+
+            <Dialog open={isDetailsModalOpen} onOpenChange={setIsDetailsModalOpen}>
+              <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Application Details</DialogTitle>
+                  <DialogDescription>
+                    Full details, documents, and audit trail for {selectedApplication?.applicant_name}.
+                  </DialogDescription>
+                </DialogHeader>
+                {selectedApplication && (
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="font-semibold text-slate-500">Applicant Name</p>
+                        <p>{selectedApplication.applicant_name}</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-500">Status</p>
+                        <Badge variant="outline">{selectedApplication.status}</Badge>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-500">Loan Type</p>
+                        <p>{selectedApplication.loan_type}</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-500">Loan Amount</p>
+                        <p>{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'UGX' }).format(selectedApplication.loan_amount)}</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-500">Monthly Income</p>
+                        <p>{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'UGX' }).format(selectedApplication.monthly_income)}</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-500">Savings Balance</p>
+                        <p>{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'UGX' }).format(selectedApplication.savings_balance)}</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-500">Collateral Type</p>
+                        <p>{selectedApplication.collateral_type}</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-500">Collateral Value</p>
+                        <p>{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'UGX' }).format(selectedApplication.collateral_value)}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <h3 className="font-semibold text-lg">Documents</h3>
+                      <p className="text-xs text-slate-500 mb-2">Note: Max file size is 500KB (Free Tier limit).</p>
+                      <div className="flex items-center gap-2">
+                        <Input 
+                          type="file" 
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleFileUpload(selectedApplication.id, e.target.files[0]);
+                            }
+                          }}
+                          disabled={uploadingDoc}
+                        />
+                        {uploadingDoc && <Loader2 className="h-4 w-4 animate-spin" />}
+                      </div>
+                      {selectedApplication.attachments && selectedApplication.attachments.length > 0 ? (
+                        <ul className="space-y-2 mt-2">
+                          {selectedApplication.attachments.map((doc, idx) => (
+                            <li key={idx} className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded">
+                              <span className="text-sm truncate max-w-[200px]">{doc.name}</span>
+                              <div className="flex items-center gap-2 text-xs text-slate-500">
+                                <span>{doc.uploadedBy}</span>
+                                <a href={doc.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center gap-1">
+                                  <ExternalLink className="h-3 w-3" /> View
+                                </a>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-slate-500">No documents uploaded yet.</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <h3 className="font-semibold text-lg">Audit Trail</h3>
+                      {selectedApplication.audit_trail && selectedApplication.audit_trail.length > 0 ? (
+                        <div className="space-y-3">
+                          {selectedApplication.audit_trail.map((log, idx) => (
+                            <div key={idx} className="text-sm border-l-2 border-blue-200 pl-3 py-1">
+                              <p className="font-medium">{log.action}</p>
+                              <p className="text-xs text-slate-500">
+                                {format(new Date(log.timestamp), 'PPpp')} by {log.userName}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500">No audit history available.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </div>
         )}
 
@@ -3016,6 +3224,10 @@ export default function App() {
               </DialogContent>
             </Dialog>
           </div>
+        )}
+
+        {activeTab === "calculator" && (userRole === "admin" || userRole === "loan_officer" || userRole === "credit_analyst") && (
+          <AmortizationCalculator />
         )}
 
         {activeTab === "profile" && (

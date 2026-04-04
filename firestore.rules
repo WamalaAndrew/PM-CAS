@@ -136,7 +136,7 @@ service cloud.firestore {
     }
 
     function isValidLoanApplication(data) {
-      let allowedKeys = ['id', 'loan_type', 'loan_amount', 'loan_purpose', 'monthly_income', 'savings_balance', 'employment_tenure_months', 'collateral_type', 'collateral_value', 'collateral_valuation_date', 'collateral_location', 'group_guarantee', 'business_sector', 'location', 'status', 'applicant_id', 'applicant_name', 'applicant_email', 'createdAt', 'assessment_id', 'uid', 'assigned_to'];
+      let allowedKeys = ['id', 'loan_type', 'loan_amount', 'loan_purpose', 'monthly_income', 'savings_balance', 'employment_tenure_months', 'collateral_type', 'collateral_value', 'collateral_valuation_date', 'collateral_location', 'group_guarantee', 'business_sector', 'location', 'status', 'applicant_id', 'applicant_name', 'applicant_email', 'createdAt', 'assessment_id', 'uid', 'assigned_to', 'attachments', 'audit_trail'];
       return request.resource.data.keys().hasOnly(allowedKeys) &&
              hasRequiredFields(['id', 'loan_type', 'loan_amount', 'loan_purpose', 'monthly_income', 'savings_balance', 'employment_tenure_months', 'collateral_type', 'collateral_value', 'collateral_valuation_date', 'collateral_location', 'group_guarantee', 'business_sector', 'location', 'status', 'applicant_id', 'applicant_name', 'applicant_email', 'createdAt', 'uid']) &&
              data.id is string && data.id.size() > 0 && data.id.size() < 100 &&
@@ -160,7 +160,9 @@ service cloud.firestore {
              isValidDateString(data.createdAt) &&
              data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
              (!('assessment_id' in data) || (data.assessment_id is string && data.assessment_id.size() < 100)) &&
-             (!('assigned_to' in data) || (data.assigned_to is string && data.assigned_to.size() < 100));
+             (!('assigned_to' in data) || (data.assigned_to is string && data.assigned_to.size() < 100)) &&
+             (!('attachments' in data) || data.attachments is list) &&
+             (!('audit_trail' in data) || data.audit_trail is list);
     }
 
     function isValidTask(data) {
