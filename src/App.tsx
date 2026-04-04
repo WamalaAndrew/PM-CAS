@@ -502,7 +502,7 @@ export default function App() {
       }
       const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3-flash-preview",
         contents: JSON.stringify(payload),
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
@@ -1526,45 +1526,49 @@ export default function App() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
                 <CardHeader>
-                  <CardTitle className="text-lg font-semibold text-slate-800 dark:text-slate-200">My Tasks</CardTitle>
+                  <CardTitle className="text-lg font-semibold text-slate-800 dark:text-slate-200">Loan Approval Rate by Type</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {tasks.filter(t => t.assignedTo === user?.uid && t.status !== 'completed').slice(0, 5).map(task => (
-                      <div key={task.id} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800">
-                        <div>
-                          <p className="font-medium text-sm text-slate-900 dark:text-slate-100">{task.title}</p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">Due: {format(new Date(task.dueDate), 'PP')}</p>
-                        </div>
-                        <Button variant="outline" size="sm" onClick={() => setActiveTab("tasks")}>View</Button>
-                      </div>
-                    ))}
-                    {tasks.filter(t => t.assignedTo === user?.uid && t.status !== 'completed').length === 0 && (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">No pending tasks assigned to you.</p>
-                    )}
-                  </div>
+                <CardContent className="h-[300px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={useMemo(() => {
+                      const types = Array.from(new Set(applications.map(a => a.loan_type)));
+                      return types.map(type => {
+                        const apps = applications.filter(a => a.loan_type === type);
+                        const approved = apps.filter(a => a.status === 'approved').length;
+                        return { name: type, rate: apps.length > 0 ? (approved / apps.length) * 100 : 0 };
+                      });
+                    }, [applications])}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" />
+                      <YAxis unit="%" />
+                      <RechartsTooltip formatter={(value: number) => value.toFixed(1) + '%'} />
+                      <Bar dataKey="rate" fill="#3b82f6" />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </CardContent>
               </Card>
-              
+
               <Card className="shadow-sm border-slate-200 dark:border-slate-800 dark:bg-slate-900">
                 <CardHeader>
-                  <CardTitle className="text-lg font-semibold text-slate-800 dark:text-slate-200">Recent Applications</CardTitle>
+                  <CardTitle className="text-lg font-semibold text-slate-800 dark:text-slate-200">Avg Loan Amount by Sector</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {applications.filter(a => a.status === 'pending').slice(0, 5).map(app => (
-                      <div key={app.id} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800">
-                        <div>
-                          <p className="font-medium text-sm text-slate-900 dark:text-slate-100">{app.applicant_name}</p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">{app.loan_type} - {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'UGX' }).format(app.loan_amount)}</p>
-                        </div>
-                        <Button variant="outline" size="sm" onClick={() => setActiveTab("applications")}>View</Button>
-                      </div>
-                    ))}
-                    {applications.filter(a => a.status === 'pending').length === 0 && (
-                      <p className="text-sm text-slate-500 dark:text-slate-400">No pending applications.</p>
-                    )}
-                  </div>
+                <CardContent className="h-[300px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={useMemo(() => {
+                      const sectors = Array.from(new Set(applications.map(a => a.business_sector)));
+                      return sectors.map(sector => {
+                        const apps = applications.filter(a => a.business_sector === sector);
+                        const avg = apps.reduce((sum, a) => sum + a.loan_amount, 0) / apps.length;
+                        return { name: sector, amount: avg };
+                      });
+                    }, [applications])}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" />
+                      <YAxis />
+                      <RechartsTooltip formatter={(value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'UGX' }).format(value)} />
+                      <Bar dataKey="amount" fill="#10b981" />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </CardContent>
               </Card>
             </div>
@@ -2056,13 +2060,14 @@ export default function App() {
                     <div className="space-y-2">
                       <h3 className="font-semibold text-lg">Audit Trail</h3>
                       {selectedApplication.audit_trail && selectedApplication.audit_trail.length > 0 ? (
-                        <div className="space-y-3">
-                          {selectedApplication.audit_trail.map((log, idx) => (
-                            <div key={idx} className="text-sm border-l-2 border-blue-200 pl-3 py-1">
-                              <p className="font-medium">{log.action}</p>
+                        <div className="space-y-2">
+                          {selectedApplication.audit_trail.map((entry, idx) => (
+                            <div key={idx} className="text-sm p-2 bg-slate-50 dark:bg-slate-800 rounded">
+                              <p className="font-medium">{entry.action}</p>
                               <p className="text-xs text-slate-500">
-                                {format(new Date(log.timestamp), 'PPpp')} by {log.userName}
+                                {format(new Date(entry.timestamp), 'PPpp')} by {entry.userName}
                               </p>
+                              {entry.details && <p className="text-xs mt-1">{entry.details}</p>}
                             </div>
                           ))}
                         </div>
