@@ -502,7 +502,7 @@ export default function App() {
       }
       const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.1-flash-lite-preview",
         contents: JSON.stringify(payload),
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
