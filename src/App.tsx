@@ -187,7 +187,11 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskSortBy, setTaskSortBy] = useState<'dueDate' | 'assignee'>('dueDate');
   const [taskSortOrder, setTaskSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [taskFilterStatus, setTaskFilterStatus] = useState<'all' | 'pending' | 'completed'>('all');
+  const [taskFilterAssignee, setTaskFilterAssignee] = useState<string>('all');
+  
   const [taskToComplete, setTaskToComplete] = useState<string | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterDecision, setFilterDecision] = useState("ALL");
@@ -752,7 +756,20 @@ export default function App() {
     try {
       const taskRef = doc(db, "tasks", taskId);
       await updateDoc(taskRef, {
-        status: newStatus
+        status: newStatus,
+        progress: newStatus === "completed" ? 100 : 0
+      });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `tasks/${taskId}`);
+    }
+  };
+
+  const handleUpdateTaskProgress = async (taskId: string, progress: number) => {
+    try {
+      const taskRef = doc(db, "tasks", taskId);
+      await updateDoc(taskRef, {
+        progress,
+        status: progress === 100 ? "completed" : "pending"
       });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `tasks/${taskId}`);
@@ -1284,18 +1301,24 @@ export default function App() {
     );
   }
 
-  const sortedTasks = [...tasks].sort((a, b) => {
-    if (taskSortBy === 'dueDate') {
-      const dateA = new Date(a.dueDate).getTime();
-      const dateB = new Date(b.dueDate).getTime();
-      return taskSortOrder === 'asc' ? dateA - dateB : dateB - dateA;
-    } else if (taskSortBy === 'assignee') {
-      const nameA = allUsers.find(u => u.uid === a.assignedTo)?.displayName || '';
-      const nameB = allUsers.find(u => u.uid === b.assignedTo)?.displayName || '';
-      return taskSortOrder === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
-    }
-    return 0;
-  });
+  const sortedTasks = [...tasks]
+    .filter(task => {
+      if (taskFilterStatus !== 'all' && task.status !== taskFilterStatus) return false;
+      if (taskFilterAssignee !== 'all' && task.assignedTo !== taskFilterAssignee) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (taskSortBy === 'dueDate') {
+        const dateA = new Date(a.dueDate).getTime();
+        const dateB = new Date(b.dueDate).getTime();
+        return taskSortOrder === 'asc' ? dateA - dateB : dateB - dateA;
+      } else if (taskSortBy === 'assignee') {
+        const nameA = allUsers.find(u => u.uid === a.assignedTo)?.displayName || '';
+        const nameB = allUsers.find(u => u.uid === b.assignedTo)?.displayName || '';
+        return taskSortOrder === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
+      }
+      return 0;
+    });
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 md:p-8 font-sans text-slate-900 dark:text-slate-50 transition-colors duration-300">
@@ -2943,9 +2966,32 @@ export default function App() {
                 <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Tasks & Follow-ups</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">Manage your loan application related tasks.</p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Select value={taskFilterStatus} onValueChange={(v: any) => setTaskFilterStatus(v)}>
+                  <SelectTrigger className="w-[130px] bg-white dark:bg-slate-900 text-xs">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                  </SelectContent>
+                </Select>
+                
+                <Select value={taskFilterAssignee} onValueChange={(v: any) => setTaskFilterAssignee(v)}>
+                  <SelectTrigger className="w-[140px] bg-white dark:bg-slate-900 text-xs">
+                    <SelectValue placeholder="Assignee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Assignees</SelectItem>
+                    {allUsers.filter(u => u.role !== 'applicant').map(u => (
+                      <SelectItem key={u.uid} value={u.uid}>{u.displayName || u.email}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
                 <Select value={taskSortBy} onValueChange={(v: any) => setTaskSortBy(v)}>
-                  <SelectTrigger className="w-[140px] bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-xs">
+                  <SelectTrigger className="w-[130px] bg-white dark:bg-slate-900 text-xs">
                     <SelectValue placeholder="Sort by" />
                   </SelectTrigger>
                   <SelectContent>
@@ -2953,14 +2999,16 @@ export default function App() {
                     <SelectItem value="assignee">Assignee</SelectItem>
                   </SelectContent>
                 </Select>
+                
                 <Button 
                   variant="outline" 
                   size="icon" 
                   onClick={() => setTaskSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
-                  className="h-10 w-10 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                  className="h-10 w-10 bg-white dark:bg-slate-900"
                 >
                   <ArrowUpDown className="h-4 w-4 text-slate-500" />
                 </Button>
+                
                 <Dialog open={isTaskModalOpen} onOpenChange={setIsTaskModalOpen}>
                   <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm" />}>
                     <Plus className="w-4 h-4 mr-2" />
@@ -3086,144 +3134,153 @@ export default function App() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pending</h3>
-                {sortedTasks.filter(t => t.status === 'pending').length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">No pending tasks.</p>
-                ) : (
-                  sortedTasks.filter(t => t.status === 'pending').map(task => (
-                    <Card key={task.id} className="border-slate-200 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
-                      <CardHeader className="pb-2">
-                        <div className="flex justify-between items-start">
-                          <CardTitle className="text-sm font-bold dark:text-slate-100">{task.title}</CardTitle>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setTaskToComplete(task.id)}>
-                            <Circle className="h-4 w-4 text-slate-400" />
+          <div className="bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[40px]"></TableHead>
+                    <TableHead>Task</TableHead>
+                    <TableHead>Application</TableHead>
+                    <TableHead>Assignee</TableHead>
+                    <TableHead>Due Date</TableHead>
+                    <TableHead className="w-[200px]">Progress</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sortedTasks.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center py-8 text-slate-500">
+                        No tasks found matching the current filters.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    sortedTasks.map(task => (
+                      <TableRow key={task.id} className={task.status === 'completed' ? 'opacity-60 bg-slate-50 dark:bg-slate-900/50' : ''}>
+                        <TableCell>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-6 w-6" 
+                            onClick={() => {
+                              if (task.status === 'pending') {
+                                setTaskToComplete(task.id);
+                              } else {
+                                handleToggleTask(task.id, 'pending');
+                              }
+                            }}
+                          >
+                            {task.status === 'completed' ? (
+                              <CheckCircle2 className="h-5 w-5 text-green-500" />
+                            ) : (
+                              <Circle className="h-5 w-5 text-slate-300 hover:text-blue-500" />
+                            )}
                           </Button>
-                        </div>
-                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                          Progress: {task.progress}%
-                          <div className="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full mt-1">
-                            <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: `${task.progress}%` }} />
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium text-sm dark:text-slate-100">
+                            <span className={task.status === 'completed' ? 'line-through text-slate-500' : ''}>
+                              {task.title}
+                            </span>
                           </div>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="pb-2">
-                        <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">{task.description}</p>
-                        <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px] text-slate-500">
-                          <div className="flex items-center gap-1">
-                            <Calendar className="w-3 h-3" />
-                            <span>Due: {format(new Date(task.dueDate), 'PP')}</span>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 line-clamp-1 max-w-[200px]">
+                            {task.description}
                           </div>
-                          {task.assignedTo && (
-                            <div className="flex items-center gap-1">
-                              <UserIcon className="w-3 h-3" />
-                              <span>Assigned: {allUsers.find(u => u.uid === task.assignedTo)?.displayName || 'Unknown'}</span>
-                            </div>
-                          )}
-                        </div>
-                      </CardContent>
-                      <CardFooter className="pt-0 flex justify-between items-center">
-                        <Button 
-                          variant="link" 
-                          className="text-[10px] p-0 h-auto text-blue-600 dark:text-blue-400 flex items-center gap-1"
-                          onClick={() => {
-                            const app = applications.find(a => a.id === task.applicationId);
-                            if (app) {
-                              setSelectedApplication(app);
-                              setIsReviewModalOpen(true);
-                            }
-                          }}
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          App: {task.applicationId.substring(0, 8)}...
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-6 w-6 text-red-500" onClick={() => handleDeleteTask(task.id)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </CardFooter>
-                    </Card>
-                  ))
-                )}
-              </div>
-
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Completed</h3>
-                {sortedTasks.filter(t => t.status === 'completed').length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">No completed tasks.</p>
-                ) : (
-                  sortedTasks.filter(t => t.status === 'completed').map(task => (
-                    <Card key={task.id} className="border-slate-200 dark:border-slate-800 dark:bg-slate-900 shadow-sm opacity-75">
-                      <CardHeader className="pb-2">
-                        <div className="flex justify-between items-start">
-                          <CardTitle className="text-sm font-bold dark:text-slate-100 line-through text-slate-500">{task.title}</CardTitle>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleToggleTask(task.id, 'pending')}>
-                            <CheckCircle2 className="h-4 w-4 text-green-500" />
+                        </TableCell>
+                        <TableCell>
+                          <Button 
+                            variant="link" 
+                            className="text-xs p-0 h-auto text-blue-600 dark:text-blue-400"
+                            onClick={() => {
+                              const app = applications.find(a => a.id === task.applicationId);
+                              if (app) {
+                                setSelectedApplication(app);
+                                setIsReviewModalOpen(true);
+                              }
+                            }}
+                          >
+                            {task.applicationId.substring(0, 8)}...
                           </Button>
-                        </div>
-                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                          Progress: {task.progress}%
-                          <div className="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full mt-1">
-                            <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: `${task.progress}%` }} />
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-600 dark:text-slate-300">
+                          {allUsers.find(u => u.uid === task.assignedTo)?.displayName || 'Unknown'}
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-600 dark:text-slate-300">
+                          {format(new Date(task.dueDate), 'PP')}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="range" 
+                              min="0" 
+                              max="100" 
+                              value={task.progress} 
+                              onChange={(e) => handleUpdateTaskProgress(task.id, parseInt(e.target.value))}
+                              className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer dark:bg-slate-700 accent-blue-600"
+                              disabled={task.status === 'completed'}
+                            />
+                            <span className="text-xs text-slate-500 w-8 text-right">{task.progress}%</span>
                           </div>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="pb-2">
-                        <p className="text-xs text-slate-500 dark:text-slate-500 line-clamp-2">{task.description}</p>
-                        <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
-                          {task.assignedTo && (
-                            <div className="flex items-center gap-1">
-                              <UserIcon className="w-3 h-3" />
-                              <span>Assigned: {allUsers.find(u => u.uid === task.assignedTo)?.displayName || 'Unknown'}</span>
-                            </div>
-                          )}
-                        </div>
-                      </CardContent>
-                      <CardFooter className="pt-0 flex justify-between items-center">
-                        <Button 
-                          variant="link" 
-                          className="text-[10px] p-0 h-auto text-slate-500 dark:text-slate-400 flex items-center gap-1"
-                          onClick={() => {
-                            const app = applications.find(a => a.id === task.applicationId);
-                            if (app) {
-                              setSelectedApplication(app);
-                              setIsReviewModalOpen(true);
-                            }
-                          }}
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          App: {task.applicationId.substring(0, 8)}...
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-6 w-6 text-red-500" onClick={() => handleDeleteTask(task.id)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </CardFooter>
-                    </Card>
-                  ))
-                )}
-              </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30" 
+                            onClick={() => setTaskToDelete(task.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
             </div>
-            
-            <Dialog open={!!taskToComplete} onOpenChange={(open) => !open && setTaskToComplete(null)}>
-              <DialogContent className="sm:max-w-[425px] dark:bg-slate-900 dark:border-slate-800">
-                <DialogHeader>
-                  <DialogTitle className="dark:text-slate-100">Confirm Task Completion</DialogTitle>
-                  <DialogDescription className="dark:text-slate-400">
-                    Are you sure you want to mark this task as completed?
-                  </DialogDescription>
-                </DialogHeader>
-                <DialogFooter className="mt-4">
-                  <Button variant="outline" onClick={() => setTaskToComplete(null)}>Cancel</Button>
-                  <Button onClick={() => {
-                    if (taskToComplete) {
-                      handleToggleTask(taskToComplete, 'completed');
-                      setTaskToComplete(null);
-                    }
-                  }}>Confirm</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
           </div>
+            
+          <Dialog open={!!taskToComplete} onOpenChange={(open) => !open && setTaskToComplete(null)}>
+            <DialogContent className="sm:max-w-[425px] dark:bg-slate-900 dark:border-slate-800">
+              <DialogHeader>
+                <DialogTitle className="dark:text-slate-100">Confirm Task Completion</DialogTitle>
+                <DialogDescription className="dark:text-slate-400">
+                  Are you sure you want to mark this task as completed?
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="mt-4">
+                <Button variant="outline" onClick={() => setTaskToComplete(null)}>Cancel</Button>
+                <Button onClick={() => {
+                  if (taskToComplete) {
+                    handleToggleTask(taskToComplete, 'completed');
+                    setTaskToComplete(null);
+                  }
+                }}>Confirm</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={!!taskToDelete} onOpenChange={(open) => !open && setTaskToDelete(null)}>
+            <DialogContent className="sm:max-w-[425px] dark:bg-slate-900 dark:border-slate-800">
+              <DialogHeader>
+                <DialogTitle className="dark:text-slate-100">Confirm Deletion</DialogTitle>
+                <DialogDescription className="dark:text-slate-400">
+                  Are you sure you want to delete this task? This action cannot be undone.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="mt-4">
+                <Button variant="outline" onClick={() => setTaskToDelete(null)}>Cancel</Button>
+                <Button variant="destructive" onClick={() => {
+                  if (taskToDelete) {
+                    handleDeleteTask(taskToDelete);
+                    setTaskToDelete(null);
+                  }
+                }}>Delete</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
         )}
 
         {activeTab === "calculator" && (userRole === "admin" || userRole === "loan_officer" || userRole === "credit_analyst") && (
